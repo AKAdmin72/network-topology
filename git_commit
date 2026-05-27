@@ -1,0 +1,22 @@
+#!/bin/bash
+cd "$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+
+git add -A
+
+if git diff --cached --quiet; then
+    echo "Nothing to commit."
+    exit 0
+fi
+
+echo "Changed files:"
+git diff --cached --name-only
+echo
+
+if [ -n "$1" ]; then
+    MSG="$*"
+else
+    read -p "Commit message (Enter = timestamp): " MSG
+    [ -z "$MSG" ] && MSG="update $(date '+%Y-%m-%d %H:%M')"
+fi
+
+git commit -m "$MSG" && git push
