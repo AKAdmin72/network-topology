@@ -1,0 +1,44 @@
+events {
+    worker_connections 256;
+}
+
+http {
+    # Redirect HTTP → HTTPS
+    server {
+        listen 8090;
+        server_name your.domain.example;
+        return 301 https://$host:8443$request_uri;
+    }
+
+    server {
+        listen 8443 ssl;
+        server_name your.domain.example;
+
+        ssl_certificate     /etc/nginx/certs/server.crt;
+        ssl_certificate_key /etc/nginx/certs/server.key;
+        ssl_protocols       TLSv1.2 TLSv1.3;
+
+        # Basic auth — generate htpasswd with:
+        #   htpasswd -c config/htpasswd username
+        auth_basic "Network Topology";
+        auth_basic_user_file /etc/nginx/htpasswd;
+
+        # SSE — disable buffering so events arrive immediately
+        location /api/events {
+            proxy_pass         http://127.0.0.1:8080;
+            proxy_set_header   Host $host;
+            proxy_set_header   X-Real-IP $remote_addr;
+            proxy_buffering    off;
+            proxy_cache        off;
+            proxy_read_timeout 3600s;
+            chunked_transfer_encoding on;
+        }
+
+        location / {
+            proxy_pass       http://127.0.0.1:8080;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-Proto https;
+        }
+    }
+}

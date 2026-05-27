@@ -1,0 +1,18 @@
+# Runtime data
+data/
+
+# Local configuration (contains real IPs, passwords, certs)
+config/switches.txt
+config/htpasswd
+config/nginx.conf
+cert/
+
+# Environment secrets
+.env
+
+# Operational / backup files
+network-topology.tar
+resume
+
+# Claude Code local settings (may contain secrets from shell history)
+.claude/

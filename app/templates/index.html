@@ -1,0 +1,2369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Network Topology</title>
+  <link rel="stylesheet" href="/static/vis-network.min.css">
+  <script src="/static/vis-network.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    div.vis-tooltip { display: none !important; }
+    body { background: #0d1117; color: #c9d1d9; font-family: 'Segoe UI', sans-serif; overflow: hidden; }
+
+    #toolbar {
+      position: fixed; top: 0; left: 0; right: 0; height: 44px;
+      display: flex; gap: 8px; padding: 0 14px;
+      background: #161b22; border-bottom: 1px solid #30363d;
+      align-items: center; z-index: 100;
+    }
+    #toolbar h1 { font-size: 15px; color: #58a6ff; margin-right: 8px; white-space: nowrap; }
+    button {
+      background: #21262d; border: 1px solid #30363d; color: #c9d1d9;
+      padding: 4px 12px; border-radius: 6px; cursor: pointer; font-size: 13px;
+    }
+    button:hover { background: #30363d; }
+    button:disabled { opacity: 0.5; cursor: default; }
+    #search-wrap { position: relative; }
+    #search {
+      background: #0d1117; border: 1px solid #30363d; color: #c9d1d9;
+      padding: 4px 10px; border-radius: 6px; font-size: 13px; width: 220px;
+    }
+    #search::placeholder { color: #484f58; }
+    #search-results {
+      display: none; position: absolute; top: calc(100% + 4px); left: 0;
+      min-width: 220px; max-height: 260px; overflow-y: auto;
+      background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.6); z-index: 300;
+    }
+    .sr-item {
+      padding: 6px 12px; font-size: 13px; cursor: pointer;
+      border-bottom: 1px solid #21262d;
+    }
+    .sr-item:last-child { border-bottom: none; }
+    .sr-item:hover, .sr-item.active { background: #21262d; }
+    .sr-ip { font-size: 11px; color: #8b949e; margin-left: 6px; }
+    #poll-status { font-size: 12px; color: #8b949e; }
+    .legend { display: flex; gap: 12px; align-items: center; margin-left: auto; font-size: 12px; color: #8b949e; }
+    .ldot { width: 10px; height: 10px; border-radius: 2px; display: inline-block; margin-right: 4px; vertical-align: middle; }
+
+    /* vis.js canvas container — explicit pixel height is required */
+    #network {
+      position: fixed;
+      top: 44px;
+      bottom: 28px;
+      left: 0;
+      right: 0;
+    }
+
+    #status-bar {
+      position: fixed; bottom: 0; left: 0; right: 0; height: 28px;
+      padding: 0 14px; background: #161b22; border-top: 1px solid #30363d;
+      font-size: 12px; color: #8b949e; display: flex; gap: 20px; align-items: center;
+      z-index: 100;
+    }
+
+    #node-panel {
+      position: fixed; right: 12px; top: 56px;
+      background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+      padding: 14px; width: 380px; display: none; z-index: 200;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+      max-height: calc(100vh - 72px);
+      flex-direction: column;
+    }
+    #np-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 10px; flex-shrink: 0; }
+    #np-header h3 { color: #58a6ff; font-size: 14px; word-break: break-all; margin: 0; flex: 1; padding-right: 8px; }
+    #close-panel { background: none; border: none; color: #8b949e; cursor: pointer; font-size: 16px; padding: 0; flex-shrink: 0; }
+    #close-panel:hover { color: #c9d1d9; }
+    #np-tabs { display: flex; gap: 1px; background: #30363d; border-radius: 6px; overflow: hidden;
+               border: 1px solid #30363d; margin-bottom: 12px; flex-shrink: 0; }
+    .np-tab { border-radius: 0; border: none; padding: 5px 0; font-size: 12px;
+              background: #161b22; flex: 1; text-align: center; color: #8b949e; }
+    .np-tab:first-child { border-radius: 5px 0 0 5px; }
+    .np-tab:last-child  { border-radius: 0 5px 5px 0; }
+    .np-tab.active { background: #1f3a5f !important; color: #58a6ff !important; }
+    .np-pane { overflow-y: auto; flex: 1 1 auto; min-height: 0; }
+    .info-row { display: flex; gap: 8px; margin-bottom: 5px; font-size: 13px; }
+    .info-label { color: #8b949e; min-width: 80px; }
+    .lldp-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+    .lldp-table th { color: #484f58; font-weight: 400; text-align: left; padding: 3px 5px 5px;
+                     border-bottom: 1px solid #30363d; white-space: nowrap; }
+    .lldp-table td { padding: 5px 5px; border-bottom: 1px solid #1c2128; color: #c9d1d9;
+                     max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .lldp-table tr:hover td { background: #1c2128; }
+    .lldp-table td.dim { color: #6e7681; }
+    .vlan-row { padding: 6px 0; border-bottom: 1px solid #1c2128; }
+    .vlan-row:last-child { border-bottom: none; }
+    .vlan-header { display: flex; align-items: center; gap: 8px; margin-bottom: 3px; }
+    .vlan-id   { color: #58a6ff; font-size: 12px; font-weight: 600; min-width: 34px; }
+    .vlan-name { color: #c9d1d9; font-size: 12px; }
+    .vlan-ports { font-size: 11px; color: #8b949e; margin-left: 4px; line-height: 1.7; word-break: break-all; }
+    .vlan-mode { font-size: 10px; font-weight: 600; padding: 1px 5px; border-radius: 3px;
+                 margin-right: 4px; vertical-align: middle; }
+    .vlan-mode.access { background: #1a4a2e; color: #3fb950; }
+    .vlan-mode.trunk  { background: #1f3a5f; color: #58a6ff; }
+
+    .tr-row { display: flex; align-items: center; gap: 6px; padding: 5px 0;
+              border-bottom: 1px solid #1c2128; font-size: 12px; }
+    .tr-row:last-child { border-bottom: none; }
+    .tr-port { color: #8b949e; min-width: 90px; font-size: 11px; font-family: monospace; }
+    .tr-bar-wrap { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+    .tr-bar-bg { height: 5px; background: #21262d; border-radius: 2px; overflow: hidden; }
+    .tr-bar-fill { height: 100%; border-radius: 2px; }
+    .tr-val { font-size: 11px; color: #6e7681; min-width: 52px; text-align: right; }
+    .badge-ok  { color: #3fb950; }
+    .badge-err { color: #f85149; }
+    .btn-danger { background: #2d1a1a; border-color: #6e2a2a; color: #f85149; }
+    .btn-danger:hover { background: #3d2020; border-color: #f85149; }
+    .view-wrap { position: relative; }
+    #view-menu {
+      display: none; position: absolute; top: calc(100% + 4px); left: 0;
+      background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+      box-shadow: 0 4px 16px rgba(0,0,0,.6); z-index: 200; min-width: 130px; padding: 4px 0;
+    }
+    .view-item {
+      display: flex; align-items: center; gap: 8px;
+      padding: 5px 12px; font-size: 13px; cursor: pointer; white-space: nowrap; user-select: none;
+    }
+    .view-item:hover { background: #21262d; }
+    .view-item input[type=checkbox] { cursor: pointer; accent-color: #58a6ff; }
+    #np-role-select {
+      background: #21262d; border: 1px solid #30363d; color: #c9d1d9;
+      font-size: 12px; padding: 2px 4px; border-radius: 4px; cursor: pointer;
+    }
+    #np-role-select:focus { outline: none; border-color: #58a6ff; }
+    .role-auto { font-size: 10px; color: #484f58; margin-left: 4px; }
+    .btn-active { background: #1f3a5f !important; border-color: #388bfd !important; color: #58a6ff !important; }
+    #sel-overlay { position: fixed; top: 44px; bottom: 28px; left: 0; right: 0; pointer-events: none; z-index: 50; }
+    #sel-rect { display: none; }
+
+    /* Icon-only toolbar buttons */
+    .icon-btn { padding: 4px 7px; font-size: 16px; min-width: 30px; line-height: 1; }
+
+    /* Overflow "⋯" dropdown */
+    .overflow-wrap { position: relative; }
+    .overflow-menu {
+      display: none; position: absolute; top: calc(100% + 6px); right: 0;
+      background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.6); z-index: 300; min-width: 160px; overflow: hidden;
+    }
+    .overflow-menu.open { display: block; }
+    .overflow-item {
+      display: block; width: 100%; text-align: left; padding: 8px 14px;
+      font-size: 13px; background: none; border: none; border-bottom: 1px solid #21262d;
+      border-radius: 0; color: #c9d1d9; cursor: pointer;
+    }
+    .overflow-item:last-child { border-bottom: none; }
+    .overflow-item:hover { background: #21262d; }
+
+    /* View mode button group */
+    #view-modes { display: flex; gap: 1px; background: #30363d; border-radius: 6px; overflow: hidden; padding: 0; border: 1px solid #30363d; }
+    .vm-btn { border-radius: 0; border: none; padding: 4px 10px; font-size: 12px; background: #161b22; }
+    .vm-btn:first-child { border-radius: 5px 0 0 5px; }
+    .vm-btn:last-child  { border-radius: 0 5px 5px 0; }
+    .vm-btn.btn-active  { background: #1f3a5f !important; color: #58a6ff !important; }
+
+    /* History panel */
+    #history-panel {
+      position: fixed; left: 12px; top: 56px;
+      background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+      padding: 14px; width: 300px; display: none; z-index: 200;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+      max-height: calc(100vh - 72px); flex-direction: column;
+    }
+    #history-panel h3 { color: #58a6ff; font-size: 14px; margin-bottom: 10px; }
+    #history-list { overflow-y: auto; flex: 1 1 auto; min-height: 0; }
+    .hev { display: flex; gap: 8px; padding: 5px 0; border-bottom: 1px solid #21262d; font-size: 12px; align-items: flex-start; }
+    .hev:last-child { border-bottom: none; }
+    .hev-icon { font-size: 14px; flex-shrink: 0; margin-top: 1px; }
+    .hev-body { flex: 1; min-width: 0; }
+    .hev-label { color: #c9d1d9; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .hev-ts    { color: #484f58; font-size: 11px; }
+    #close-history { float: right; background: none; border: none; color: #8b949e; cursor: pointer; font-size: 16px; padding: 0; }
+    #close-history:hover { color: #c9d1d9; }
+
+    /* Edge (link) info panel */
+    #edge-panel {
+      position: fixed; right: 12px; top: 56px;
+      background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+      padding: 14px; width: 280px; display: none; z-index: 200;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.6); flex-direction: column;
+    }
+    #close-edge-panel { float: right; background: none; border: none; color: #8b949e; cursor: pointer; font-size: 16px; padding: 0; }
+    #close-edge-panel:hover { color: #c9d1d9; }
+    .ep-section { color: #8b949e; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; margin: 10px 0 5px; border-top: 1px solid #21262d; padding-top: 8px; }
+    .ep-section:first-of-type { margin-top: 6px; }
+
+    /* Stats modal */
+    #stats-modal {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.75);
+      z-index: 600; display: none; align-items: center; justify-content: center;
+    }
+    #stats-modal.open { display: flex; }
+    #stats-inner {
+      background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+      width: min(760px, 96vw); max-height: 90vh;
+      display: flex; flex-direction: column; overflow: hidden;
+    }
+    #stats-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 14px 16px 10px; border-bottom: 1px solid #30363d; flex-shrink: 0;
+    }
+    #stats-header span { color: #58a6ff; font-size: 14px; font-weight: 600; }
+    #stats-body { overflow-y: auto; padding: 14px 16px; flex: 1; }
+    .stats-section {
+      color: #8b949e; font-size: 11px; text-transform: uppercase;
+      letter-spacing: .5px; margin: 16px 0 8px; border-top: 1px solid #21262d;
+      padding-top: 10px;
+    }
+    .stats-section:first-child { margin-top: 0; border-top: none; padding-top: 0; }
+    .stats-legend { font-size: 11px; color: #484f58; margin-bottom: 6px; }
+    canvas.stats-canvas { width: 100%; display: block; border-radius: 3px; }
+
+    /* Chart modal */
+    #chart-modal {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.75);
+      z-index: 600; display: none; align-items: center; justify-content: center;
+    }
+    #chart-modal.open { display: flex; }
+    #chart-modal-inner {
+      background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+      padding: 16px; width: min(720px, 95vw);
+    }
+    #cm-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+    #cm-title  { color: #58a6ff; font-size: 13px; font-weight: 600; flex: 1; min-width: 0;
+                 overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-right: 12px; }
+    #cm-chart  { width: 100%; height: 220px; display: block; border-radius: 4px; }
+    .cm-range-btn { font-size: 12px; padding: 3px 9px; }
+
+    /* MAC search combobox */
+    #mac-filter-wrap { position: relative; }
+    #mac-combo-inner { position: relative; display: flex; align-items: center; }
+    #mac-input {
+      background: #0d1117; border: 1px solid #30363d; color: #c9d1d9;
+      padding: 4px 24px 4px 10px; border-radius: 6px; font-size: 12px; width: 148px;
+      transition: border-color .15s; font-family: monospace;
+    }
+    #mac-input::placeholder { color: #484f58; font-family: 'Segoe UI', sans-serif; font-size: 13px; }
+    #mac-input.mac-active { border-color: #f0c040; }
+    #mac-x {
+      position: absolute; right: 5px; top: 50%; transform: translateY(-50%);
+      display: none; background: none; border: none; color: #6e7681;
+      cursor: pointer; font-size: 15px; padding: 0; line-height: 1;
+    }
+    #mac-x:hover { color: #c9d1d9; }
+    #mac-dd {
+      display: none; position: absolute; top: calc(100% + 4px); left: 0;
+      width: 300px; max-height: 260px; overflow-y: auto;
+      background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+      box-shadow: 0 4px 16px rgba(0,0,0,.6); z-index: 300;
+    }
+    .mdd-item {
+      padding: 7px 10px; font-size: 12px; cursor: pointer;
+      border-bottom: 1px solid #21262d;
+    }
+    .mdd-item:last-child { border-bottom: none; }
+    .mdd-item:hover, .mdd-item.mdd-hi { background: #21262d; }
+    .mdd-mac { color: #f0c040; font-family: monospace; font-weight: 600; font-size: 12px; }
+    .mdd-sw  { color: #8b949e; font-size: 11px; margin-top: 2px; }
+    /* MAC route panel */
+    #mac-panel {
+      position: fixed; left: 12px; bottom: 38px;
+      background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+      padding: 14px; width: 330px; display: none; z-index: 200;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+    }
+    #mac-panel-hdr { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+    #mac-panel-title { color: #f0c040; font-size: 13px; font-weight: 600; font-family: monospace; }
+    .mac-row { font-size: 12px; color: #c9d1d9; margin-bottom: 4px; }
+    .mac-lbl { color: #8b949e; margin-right: 6px; min-width: 48px; display: inline-block; }
+    #mac-path { margin-top: 10px; padding-top: 8px; border-top: 1px solid #21262d; }
+    .mac-path-title { color: #8b949e; font-size: 11px; margin-bottom: 6px; }
+    .mac-hop { display: inline-flex; align-items: center; gap: 4px; }
+    .mac-node { background: #1f3a5f; border: 1px solid #388bfd; border-radius: 4px;
+                padding: 2px 8px; color: #58a6ff; font-size: 11px; cursor: pointer; }
+    .mac-node:hover { background: #2d4a7a; }
+    .mac-node.is-edge { background: #3a3000; border-color: #f0c040; color: #f0c040; }
+    .mac-node.is-edge:hover { background: #4a4000; }
+    .mac-arrow { color: #484f58; font-size: 11px; margin: 0 2px; }
+    #mac-status { font-size: 11px; color: #8b949e; margin-top: 8px; }
+
+    /* VLAN filter combobox */
+    #vlan-filter-wrap { position: relative; }
+    #vlan-combo-inner { position: relative; display: flex; align-items: center; }
+    #vlan-input {
+      background: #0d1117; border: 1px solid #30363d; color: #c9d1d9;
+      padding: 4px 24px 4px 10px; border-radius: 6px; font-size: 13px; width: 150px;
+      transition: border-color .15s;
+    }
+    #vlan-input::placeholder { color: #484f58; }
+    #vlan-input.vlan-active  { border-color: #388bfd; }
+    #vlan-x {
+      position: absolute; right: 5px; top: 50%; transform: translateY(-50%);
+      display: none; background: none; border: none; color: #6e7681;
+      cursor: pointer; font-size: 15px; padding: 0; line-height: 1;
+    }
+    #vlan-x:hover { color: #c9d1d9; }
+    #vlan-dd {
+      display: none; position: absolute; top: calc(100% + 4px); left: 0;
+      width: 240px; max-height: 260px; overflow-y: auto;
+      background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+      box-shadow: 0 4px 16px rgba(0,0,0,.6); z-index: 300;
+    }
+    .vdd-item {
+      padding: 6px 10px; font-size: 12px; cursor: pointer;
+      border-bottom: 1px solid #21262d; display: flex; align-items: center; gap: 8px;
+    }
+    .vdd-item:last-child { border-bottom: none; }
+    .vdd-item:hover, .vdd-item.vdd-hi { background: #21262d; }
+    .vdd-vid  { color: #58a6ff; font-weight: 600; min-width: 32px; }
+    .vdd-name { color: #c9d1d9; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .vdd-cnt  { color: #484f58; font-size: 11px; }
+  </style>
+</head>
+<body>
+
+<div id="toolbar">
+  <h1>Network Topology</h1>
+  <button class="icon-btn" title="Fit view" onclick="network && network.fit({animation:{duration:500}})">⤢</button>
+  <button class="icon-btn" id="btn-refresh" title="Refresh topology" onclick="triggerRefresh()">↻</button>
+  <button class="icon-btn" id="btn-select"  title="Box select"       onclick="toggleSelectMode()">⬚</button>
+
+  <div class="view-wrap">
+    <button id="btn-view" onclick="toggleViewMenu(event)">View ▾</button>
+    <div id="view-menu">
+      <label class="view-item"><input type="checkbox" value="switch" onchange="toggleVisibleType(this)"> ⬡ Switch</label>
+      <label class="view-item"><input type="checkbox" value="router" onchange="toggleVisibleType(this)"> ⊕ Router</label>
+      <label class="view-item"><input type="checkbox" value="wifi"   onchange="toggleVisibleType(this)"> ≋ WiFi</label>
+      <label class="view-item"><input type="checkbox" value="other"  onchange="toggleVisibleType(this)"> ● Other</label>
+    </div>
+  </div>
+  <div id="view-modes">
+    <button class="vm-btn btn-active" id="vm-speed"   onclick="setViewMode('speed')">Speed</button>
+    <button class="vm-btn"            id="vm-traffic" onclick="setViewMode('traffic')">Traffic</button>
+    <button class="vm-btn"            id="vm-errors"  onclick="setViewMode('errors')">Errors</button>
+    <button class="vm-btn"            id="vm-stp"     onclick="setViewMode('stp')">STP</button>
+  </div>
+  <div id="search-wrap">
+    <input id="search" type="text" placeholder="Search switch..." oninput="searchNode(this.value)" onkeydown="searchKey(event)">
+    <div id="search-results"></div>
+  </div>
+  <div id="vlan-filter-wrap">
+    <div id="vlan-combo-inner">
+      <input id="vlan-input" type="text" placeholder="Filter VLAN…"
+             oninput="vlanInput(this.value)" onkeydown="vlanKey(event)"
+             onfocus="vlanInput(this.value)" autocomplete="off">
+      <button id="vlan-x" onclick="clearVlanFilter()" title="Clear VLAN filter">×</button>
+    </div>
+    <div id="vlan-dd"></div>
+  </div>
+  <div id="mac-filter-wrap">
+    <div id="mac-combo-inner">
+      <input id="mac-input" type="text" placeholder="Search MAC…"
+             oninput="macInput(this.value)" onkeydown="macKey(event)"
+             onfocus="macInput(this.value)" autocomplete="off" spellcheck="false">
+      <button id="mac-x" onclick="clearMacFilter()" title="Clear MAC search">×</button>
+    </div>
+    <div id="mac-dd"></div>
+  </div>
+  <span id="poll-status"></span>
+  <div class="overflow-wrap" id="overflow-wrap">
+    <button class="icon-btn" title="More actions" onclick="toggleOverflow()">⋯</button>
+    <div class="overflow-menu" id="overflow-menu">
+      <button class="overflow-item" id="btn-history" onclick="toggleHistory(); closeOverflow()">📋 History</button>
+      <button class="overflow-item" id="btn-stats"   onclick="openStats();    closeOverflow()">📊 Statistics</button>
+    </div>
+  </div>
+</div>
+
+<div id="network"></div>
+
+<div id="history-panel">
+  <button id="close-history" onclick="toggleHistory()">✕</button>
+  <h3>Event Log</h3>
+  <div id="history-list"></div>
+</div>
+<svg id="sel-overlay" xmlns="http://www.w3.org/2000/svg">
+  <rect id="sel-rect" fill="rgba(88,166,255,0.08)" stroke="#58a6ff" stroke-width="1" stroke-dasharray="5,3"/>
+</svg>
+
+<div id="status-bar">
+  <span id="s-nodes">Nodes: —</span>
+  <span id="s-edges">Links: —</span>
+  <span id="s-unreach">Unreachable: —</span>
+  <span id="s-macs">MACs: —</span>
+  <span id="s-poll">Polled: —</span>
+  <span id="s-updated">Updated: —</span>
+  <div class="legend">
+    <span><span class="ldot" style="background:#1f6feb"></span>Reachable</span>
+    <span><span class="ldot" style="background:#6e2a2a"></span>Unreachable</span>
+    <span><span class="ldot" style="background:#2d333b"></span>LLDP neighbor</span>
+    <span style="border-left:1px solid #30363d;padding-left:12px">
+      <span class="ldot" style="background:#3fb950;border-radius:2px;width:18px;height:3px"></span>10G
+    </span>
+    <span><span class="ldot" style="background:#e3b341;border-radius:2px;width:18px;height:2px"></span>1G</span>
+    <span><span class="ldot" style="background:#484f58;border-radius:2px;width:18px;height:1px"></span>100M</span>
+  </div>
+</div>
+
+<div id="edge-panel">
+  <button id="close-edge-panel" onclick="closeEdgePanel()">✕</button>
+  <h3 id="ep-ports" style="color:#58a6ff;font-size:13px;margin-bottom:10px;word-break:break-all">— ↔ —</h3>
+  <div class="info-row"><span class="info-label">From</span><span id="ep-from">—</span></div>
+  <div class="info-row"><span class="info-label">To</span><span id="ep-to">—</span></div>
+  <div class="info-row"><span class="info-label">Speed</span><span id="ep-speed">—</span></div>
+  <div class="info-row"><span class="info-label">Status</span><span id="ep-status">—</span></div>
+  <div class="ep-section">Traffic</div>
+  <div class="info-row"><span class="info-label">↑ Out</span><span id="ep-out">—</span></div>
+  <div class="info-row"><span class="info-label">↓ In</span><span id="ep-in">—</span></div>
+  <div class="ep-section">Errors</div>
+  <div class="info-row"><span class="info-label">↑ Out</span><span id="ep-err-out">—</span></div>
+  <div class="info-row"><span class="info-label">↓ In</span><span id="ep-err-in">—</span></div>
+  <div class="info-row" id="ep-stp-row" style="display:none"><span class="info-label">STP</span><span id="ep-stp">—</span></div>
+  <div id="ep-cached-row" style="display:none;font-size:11px;color:#484f58;margin-top:10px;border-top:1px solid #21262d;padding-top:8px"></div>
+  <div id="ep-chart-wrap">
+    <div class="ep-section" style="display:flex;align-items:center;justify-content:space-between">
+      <span>Traffic history (24h)</span>
+      <button id="ep-expand-btn" onclick="expandChart()" title="Expand chart"
+        style="background:none;border:none;color:#8b949e;cursor:pointer;font-size:15px;padding:0;line-height:1">⤢</button>
+    </div>
+    <canvas id="ep-chart" style="width:100%;height:70px;display:block;border-radius:3px"></canvas>
+    <div style="font-size:10px;color:#484f58;text-align:right;margin-top:3px">
+      <span style="color:#3fb950">─ ↑out</span>&nbsp;&nbsp;<span style="color:#388bfd">─ ↓in</span>
+    </div>
+  </div>
+  <div class="ep-section">Poll</div>
+  <div class="info-row"><span class="info-label">Updated</span><span id="ep-updated" style="font-variant-numeric:tabular-nums">—</span></div>
+  <div class="info-row"><span class="info-label">Next in</span><span id="ep-next"    style="font-variant-numeric:tabular-nums">—</span></div>
+  <button id="ep-refresh-btn" onclick="refreshLinkCounters()" style="width:100%;margin-top:10px">↻ Refresh counters</button>
+  <div id="ep-refresh-status" style="font-size:11px;margin-top:5px;text-align:center"></div>
+</div>
+
+<div id="mac-panel">
+  <div id="mac-panel-hdr">
+    <span id="mac-panel-title">—</span>
+    <button onclick="clearMacFilter()" style="background:none;border:none;color:#8b949e;cursor:pointer;font-size:15px;padding:0;line-height:1">✕</button>
+  </div>
+  <div id="mac-info"></div>
+  <div id="mac-path"></div>
+  <div id="mac-status"></div>
+</div>
+
+<div id="stats-modal">
+  <div id="stats-inner">
+    <div id="stats-header">
+      <span>Traffic Statistics</span>
+      <div style="display:flex;gap:6px;align-items:center">
+        <div id="stats-ranges" style="display:flex;gap:4px"></div>
+        <button onclick="closeStats()" style="background:none;border:none;color:#8b949e;cursor:pointer;font-size:16px;padding:0;margin-left:6px">✕</button>
+      </div>
+    </div>
+    <div id="stats-body">
+      <div class="stats-section">Top 10 портов по трафику</div>
+      <div class="stats-legend"><span style="color:#3fb950">── ↑ out</span>&nbsp;&nbsp;<span style="color:#388bfd">── ↓ in</span>&nbsp;&nbsp;(avg за период)</div>
+      <canvas id="stats-ports-canvas" class="stats-canvas"></canvas>
+      <div class="stats-section">Трафик по свитчам</div>
+      <div class="stats-legend"><span style="color:#8957e5">── in + out avg</span></div>
+      <canvas id="stats-switch-canvas" class="stats-canvas"></canvas>
+    </div>
+  </div>
+</div>
+
+<div id="chart-modal">
+  <div id="chart-modal-inner">
+    <div id="cm-header">
+      <span id="cm-title">Traffic</span>
+      <div style="display:flex;gap:6px;align-items:center">
+        <div id="cm-ranges" style="display:flex;gap:4px"></div>
+        <button onclick="closeChartModal()" style="background:none;border:none;color:#8b949e;cursor:pointer;font-size:16px;padding:0;margin-left:6px">✕</button>
+      </div>
+    </div>
+    <canvas id="cm-chart"></canvas>
+    <div style="font-size:11px;color:#484f58;text-align:right;margin-top:6px">
+      <span style="color:#3fb950">── ↑ out</span>&nbsp;&nbsp;<span style="color:#388bfd">── ↓ in</span>
+    </div>
+  </div>
+</div>
+
+<div id="node-panel">
+  <div id="np-header">
+    <h3 id="np-name">—</h3>
+    <button id="close-panel" onclick="closePanel()">✕</button>
+  </div>
+  <div id="np-tabs">
+    <button class="np-tab active" onclick="npTab('info')">Info</button>
+    <button class="np-tab"        onclick="npTab('lldp')">LLDP</button>
+    <button class="np-tab"        onclick="npTab('traffic')">Traffic</button>
+    <button class="np-tab"        onclick="npTab('vlan')">VLAN</button>
+    <button class="np-tab"        onclick="npTab('mac')">MAC</button>
+  </div>
+
+  <div id="np-pane-info" class="np-pane">
+    <div class="info-row"><span class="info-label">IP</span><span id="np-ip">—</span></div>
+    <div class="info-row"><span class="info-label">Status</span><span id="np-status">—</span></div>
+    <div class="info-row"><span class="info-label">Monitor</span><span id="np-managed">—</span></div>
+    <div class="info-row">
+      <span class="info-label">Role</span>
+      <select id="np-role-select" onchange="setNodeType(this.value)">
+        <option value="switch">⬡ Switch</option>
+        <option value="router">⊕ Router</option>
+        <option value="wifi">≋ WiFi</option>
+        <option value="other">● Other</option>
+      </select>
+      <span id="np-role-auto" class="role-auto"></span>
+    </div>
+    <div class="info-row" id="np-mac-row" style="display:none">
+      <span class="info-label">MACs</span>
+      <span id="np-mac">—</span>
+    </div>
+    <div class="info-row" id="np-descr-row" style="display:none">
+      <span class="info-label">Model</span>
+      <span id="np-descr" style="font-size:12px;color:#c9d1d9;word-break:break-word"></span>
+    </div>
+    <button id="btn-add-monitor" onclick="addToMonitoring()" style="display:none;width:100%;margin-top:10px;">+ Add to monitoring</button>
+    <div id="np-add-status" style="font-size:12px;margin-top:6px;"></div>
+    <button id="btn-delete" class="btn-danger" onclick="deleteNode()" style="width:100%;margin-top:12px;">Delete</button>
+  </div>
+
+  <div id="np-pane-lldp" class="np-pane" style="display:none">
+    <div id="np-lldp-content"></div>
+  </div>
+
+  <div id="np-pane-traffic" class="np-pane" style="display:none">
+    <div id="np-traffic-content"></div>
+  </div>
+
+  <div id="np-pane-vlan" class="np-pane" style="display:none">
+    <div id="np-vlan-content"></div>
+  </div>
+
+  <div id="np-pane-mac" class="np-pane" style="display:none">
+    <div id="np-mac-content"></div>
+  </div>
+</div>
+
+<script>
+/* one-time: set floor positions for SW-D* switches */
+(function () {
+  if (localStorage.getItem('net-topo-floor-v1')) return;
+  var pos;
+  try { pos = JSON.parse(localStorage.getItem('net-topo-positions') || '{}'); } catch (e) { pos = {}; }
+  Object.assign(pos, {
+    'SW-D5-TGP1': { x:    0, y: -600 },
+    'SW-D4-TGP1': { x: -110, y: -360 },
+    'SW-D4-TG4':  { x:  110, y: -360 },
+    'SW-D1-TG4':  { x:    0, y:  360 },
+    'SW-D0-TGA1': { x: -110, y:  600 },
+    'SW-D0-TGA2': { x:  110, y:  600 },
+  });
+  localStorage.setItem('net-topo-positions', JSON.stringify(pos));
+  localStorage.setItem('net-topo-floor-v1', '1');
+})();
+</script>
+
+<script>
+let network, nodesDS, edgesDS;
+let currentData = { nodes: [], edges: [] };
+let _currentNodeId = null;
+let _currentEdgeId = null;
+let _lastUpdateTs  = null;
+let _pollInterval  = 300;
+let _viewMode = 'speed';
+let _macRouteHighlight = null;
+
+function escHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+let _cachedPos = {};
+let _saveTimer = null;
+
+function savedPos() { return _cachedPos; }
+
+async function fetchPositions() {
+  try {
+    const r = await fetch('/api/positions');
+    _cachedPos = await r.json();
+  } catch { _cachedPos = {}; }
+  return _cachedPos;
+}
+
+function savePositions() {
+  if (!network) return;
+  const allPos = network.getPositions();
+  for (const [id, pos] of Object.entries(allPos)) {
+    _cachedPos[id] = pos;
+  }
+  clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(() => {
+    fetch('/api/positions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(_cachedPos),
+    }).catch(() => {});
+  }, 1500);
+}
+
+function _isInfraRaw(n) {
+  return n.managed === true || n.lldp_is_infra === true;
+}
+
+function _typeSymbol(n) {
+  if (n?.node_type === 'switch') return '⬡ ';
+  if (n?.node_type === 'router') return '⊕ ';
+  if (n?.node_type === 'wifi')   return '≋ ';
+  // fallback for stale data without node_type
+  const lbl = String(n?.label || n?.id || '');
+  if (/^SW-/i.test(lbl)) return '⬡ ';
+  if (/^RT-/i.test(lbl)) return '⊕ ';
+  if (/^(AP|WAP|UAP)[-_]/i.test(lbl)) return '≋ ';
+  return '';
+}
+
+function _nodeVisStyle(n) {
+  const type = n.node_type || 'other';
+  let bg, border, hlBg, hlBorder, shape;
+  switch (type) {
+    case 'switch':
+      shape = 'box';
+      if (n.managed && n.reachable)  { bg = '#1f3a5f'; border = '#388bfd'; hlBg = '#2d4a7a'; hlBorder = '#58a6ff'; }
+      else if (n.managed)            { bg = '#4a1a1a'; border = '#f85149'; hlBg = '#5a2020'; hlBorder = '#ff7070'; }
+      else                           { bg = '#162338'; border = '#2a5f8f'; hlBg = '#1f3a5f'; hlBorder = '#388bfd'; }
+      break;
+    case 'router':
+      shape = 'box';
+      if (n.managed && n.reachable)  { bg = '#2a2200'; border = '#e3b341'; hlBg = '#3d3300'; hlBorder = '#f0c040'; }
+      else if (n.managed)            { bg = '#2a1a00'; border = '#c9813a'; hlBg = '#3d2800'; hlBorder = '#e3b341'; }
+      else                           { bg = '#221b00'; border = '#8a6820'; hlBg = '#2a2200'; hlBorder = '#c9a030'; }
+      break;
+    case 'wifi':
+      shape = 'diamond';
+      bg = '#0a2828'; border = '#00b4c4'; hlBg = '#0d3535'; hlBorder = '#39d0d8';
+      break;
+    default:
+      shape = 'box';
+      bg = '#1c2128'; border = '#484f58'; hlBg = '#262c34'; hlBorder = '#6e7681';
+      break;
+  }
+  if (n.stp_root) { border = '#f0c040'; hlBorder = '#f0c040'; }
+  return {
+    shape,
+    borderWidth: (n.managed && !n.reachable) ? 2 : 1,
+    color: {
+      background: bg, border,
+      highlight: { background: hlBg, border: hlBorder },
+      hover:      { background: hlBg, border: hlBorder },
+    },
+  };
+}
+
+function buildVisNodes(data, pos = {}) {
+  return data.nodes.map(n => {
+    const p       = pos[n.id];
+    const style   = _nodeVisStyle(n);
+    return {
+      id: n.id,
+      label: _makeBaseLabel(n, n.id),
+      title: null,
+      ...style,
+      font:   { color: '#c9d1d9', size: 12 },
+      margin: { top: 6, bottom: 6, left: 10, right: 10 },
+      x: p ? p.x : undefined,
+      y: p ? p.y : undefined,
+      physics: !p,
+      hidden: !_isInfraRaw(n),
+      _raw: n,
+    };
+  });
+}
+
+function _fmtBps(bps) {
+  if (bps == null || bps < 0) return '—';
+  if (bps >= 1e9) return (bps / 1e9).toFixed(1) + 'G';
+  if (bps >= 1e6) return (bps / 1e6).toFixed(1) + 'M';
+  if (bps >= 1e3) return (bps / 1e3).toFixed(0) + 'K';
+  return Math.round(bps) + 'B';
+}
+
+function _speedBps(s) {
+  if (!s) return 0;
+  if (s.endsWith('G+')) return 10e9;
+  if (s.endsWith('G'))  return parseFloat(s) * 1e9;
+  if (s.endsWith('M'))  return parseFloat(s) * 1e6;
+  return 0;
+}
+
+function _abbrevPort(p) {
+  if (!p) return '';
+  return p
+    .replace(/^TenGigabitEthernet/i,    'Te')
+    .replace(/^GigabitEthernet/i,       'Gi')
+    .replace(/^TwentyFiveGigE/i,        'Tf')
+    .replace(/^FortyGigabitEthernet/i,  'Fo')
+    .replace(/^HundredGigE(thernet)?/i, 'Hu')
+    .replace(/^FastEthernet/i,          'Fa')
+    .replace(/^Ethernet/i,              'Et')
+    .replace(/^Management/i,            'Mg')
+    .replace(/^Port-channel/i,          'Po')
+    .replace(/^Loopback/i,              'Lo');
+}
+
+function buildVisEdges(data) {
+  return data.edges.map((e, i) => {
+    const cached   = !!e.cached;
+    const portDown = !cached && e.local_port_status === '2';
+    const speed    = e.local_port_speed || '';
+    const portLabel = (e.local_port && e.remote_port)
+      ? `${_abbrevPort(e.local_port)} · ${_abbrevPort(e.remote_port)}`
+      : (e.local_port ? _abbrevPort(e.local_port) : '');
+    const lastSeen  = e.last_seen ? new Date(e.last_seen).toLocaleString() : '—';
+
+    let color, label, fontColor, dashes, width;
+
+    if (cached) {
+      color     = { color: '#3d3d3d', hover: '#6e7681', highlight: '#8b949e' };
+      label     = portLabel;
+      fontColor = '#484f58';
+      dashes    = [6, 4];
+      width     = 1;
+    } else if (_viewMode === 'traffic') {
+      const inB  = e.in_bps, outB = e.out_bps;
+      const maxB = Math.max(inB || 0, outB || 0);
+      const pct  = _speedBps(speed) > 0 ? maxB / _speedBps(speed) * 100 : -1;
+      color = pct < 0  ? { color: '#21262d', hover: '#6e7681', highlight: '#58a6ff' }
+            : pct < 30 ? { color: '#1a4a2e', hover: '#3fb950', highlight: '#56d364' }
+            : pct < 70 ? { color: '#4a3800', hover: '#e3b341', highlight: '#f0c040' }
+            : pct < 90 ? { color: '#5a2a00', hover: '#d4820a', highlight: '#e3b341' }
+            :             { color: '#5a0a0a', hover: '#f85149', highlight: '#ff7b72' };
+      fontColor = pct < 0 ? '#484f58' : pct < 30 ? '#3fb950' : pct < 70 ? '#e3b341' : pct < 90 ? '#d4820a' : '#f85149';
+      label     = (inB != null || outB != null) ? `↑${_fmtBps(outB)}\n↓${_fmtBps(inB)}` : portLabel;
+      dashes    = portDown ? [3, 3] : false;
+      width     = portDown ? 1 : Math.max(1, Math.min(4, maxB / 100_000_000));
+    } else if (_viewMode === 'errors') {
+      const errIn = e.in_err_s || 0, errOut = e.out_err_s || 0;
+      const hasErr = errIn > 0 || errOut > 0;
+      color     = hasErr
+        ? { color: '#5a0a0a', hover: '#f85149', highlight: '#ff7b72' }
+        : { color: '#1a3a1a', hover: '#3fb950', highlight: '#56d364' };
+      fontColor = hasErr ? '#f85149' : '#3fb950';
+      label     = hasErr ? `↑${errIn.toFixed(2)}\n↓${errOut.toFixed(2)} err/s` : portLabel;
+      dashes    = portDown ? [3, 3] : false;
+      width     = hasErr ? 2 : 1.5;
+    } else if (_viewMode === 'stp') {
+      const blocking = e.stp_state === 'blocking';
+      const learning = e.stp_state === 'learning';
+      color = blocking ? { color: '#3a1a5a', hover: '#8957e5', highlight: '#a371f7' }
+            : learning  ? { color: '#3a3000', hover: '#e3b341', highlight: '#f0c040' }
+            :              { color: '#30363d', hover: '#8b949e', highlight: '#58a6ff' };
+      fontColor = blocking ? '#8957e5' : learning ? '#e3b341' : '#6e7681';
+      label     = blocking ? 'BLK' : learning ? 'LRN' : portLabel;
+      dashes    = blocking ? [4, 3] : false;
+      width     = 1.5;
+    } else {
+      // Speed mode (default)
+      if (portDown)                              color = { color: '#5a3a00', hover: '#d29922', highlight: '#e3b341' };
+      else if (speed === '10G' || speed === '10G+') color = { color: '#1a4a2e', hover: '#3fb950', highlight: '#56d364' };
+      else if (speed === '1G')                   color = { color: '#4a3800', hover: '#e3b341', highlight: '#f0c040' };
+      else if (speed === '100M')                 color = { color: '#2d2d2d', hover: '#6e7681', highlight: '#8b949e' };
+      else                                       color = { color: '#21262d', hover: '#6e7681', highlight: '#58a6ff' };
+      fontColor = portDown ? '#d29922' : (speed === '10G' || speed === '10G+') ? '#3fb950' : speed === '1G' ? '#e3b341' : '#6e7681';
+      label     = portLabel;
+      dashes    = false;
+      width     = speed === '10G' || speed === '10G+' ? 3 : speed === '1G' ? 2 : 1.5;
+    }
+
+    const titleBase = `${escHtml(e.from)}:${escHtml(e.local_port || '?')} ↔ ${escHtml(e.to)}:${escHtml(e.remote_port || '?')}`;
+    const titleExtra = [
+      speed    ? `<br>${escHtml(speed)}`                                          : '',
+      portDown ? '<br><span style="color:#d29922">⚠ port down</span>'             : '',
+      (e.in_bps != null) ? `<br>↑${_fmtBps(e.out_bps)} / ↓${_fmtBps(e.in_bps)}` : '',
+      (e.in_err_s > 0 || e.out_err_s > 0)
+        ? `<br><span style="color:#f85149">errors ↑${(e.in_err_s||0).toFixed(2)} ↓${(e.out_err_s||0).toFixed(2)}/s</span>` : '',
+      e.stp_state ? `<br>STP: ${escHtml(e.stp_state)}` : '',
+      cached ? `<br><span style="color:#8b949e;font-size:11px">cached · last seen: ${escHtml(lastSeen)}</span>` : '',
+    ].join('');
+
+    return {
+      id: i, from: e.from, to: e.to,
+      label, dashes: cached ? [6, 4] : (dashes || false),
+      color,
+      font: { color: fontColor, size: 10, align: 'horizontal', strokeWidth: 0, background: '#0d1117' },
+      chosen: {
+        label: (values, id, selected, hovering) => {
+          if (selected || hovering) { values.size = 14; values.color = '#ffffff'; }
+        },
+      },
+      smooth: { type: 'continuous', roundness: 0.1 },
+      width: cached ? 1 : width,
+      title: titleBase + titleExtra,
+    };
+  });
+}
+
+function setViewMode(mode) {
+  _viewMode = mode;
+  ['speed', 'traffic', 'errors', 'stp'].forEach(m => {
+    document.getElementById('vm-' + m).classList.toggle('btn-active', m === mode);
+  });
+  if (edgesDS) {
+    edgesDS.update(buildVisEdges(currentData));
+    if (_vlanFilter) _applyVlanFilter();
+    else if (_macRouteHighlight) _applyMacHighlight(_macRouteHighlight.nodes, _macRouteHighlight.edges);
+  }
+}
+
+async function addToMonitoring() {
+  const btn    = document.getElementById('btn-add-monitor');
+  const status = document.getElementById('np-add-status');
+  const ip     = btn.dataset.ip;
+  btn.disabled = true;
+  status.textContent = '';
+  try {
+    const resp = await fetch('/api/add_switch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ip }),
+    });
+    const data = await resp.json();
+    if (data.status === 'added') {
+      status.style.color = '#3fb950';
+      status.textContent = `✓ Added, polling…`;
+      btn.style.display = 'none';
+      const t = setInterval(async () => {
+        await loadTopology();
+        if (currentData.nodes.find(n => n.ip === ip && n.managed)) clearInterval(t);
+      }, 5000);
+      setTimeout(() => clearInterval(t), 120000);
+    } else if (data.status === 'already_exists') {
+      status.style.color = '#d29922';
+      status.textContent = 'Already in monitoring list';
+      btn.disabled = false;
+    } else {
+      status.style.color = '#f85149';
+      status.textContent = 'Error: ' + data.status;
+      btn.disabled = false;
+    }
+  } catch {
+    status.style.color = '#f85149';
+    status.textContent = 'Request failed';
+    btn.disabled = false;
+  }
+}
+
+
+async function loadTopology() {
+  try {
+    const resp = await fetch('/api/topology');
+    currentData = await resp.json();
+    buildVlanIndex(currentData);
+  } catch (e) {
+    console.error('fetch error', e);
+    return;
+  }
+
+  if (!network) await fetchPositions();
+  const visNodes = buildVisNodes(currentData, savedPos());
+  const visEdges = buildVisEdges(currentData);
+
+  if (!network) {
+    nodesDS = new vis.DataSet(visNodes);
+    edgesDS = new vis.DataSet(visEdges);
+
+    const container = document.getElementById('network');
+    network = new vis.Network(container, { nodes: nodesDS, edges: edgesDS }, {
+      physics: {
+        enabled: true,
+        solver: 'barnesHut',
+        barnesHut: {
+          gravitationalConstant: -8000,
+          centralGravity: 0.3,
+          springLength: 180,
+          springConstant: 0.04,
+          damping: 0.09,
+        },
+        stabilization: {
+          enabled: true,
+          iterations: 500,
+          updateInterval: 25,
+          fit: true,          // fit to screen after stabilization
+        },
+      },
+      interaction: {
+        hover: true,
+        tooltipDelay: 100,
+        navigationButtons: true,
+        keyboard: true,
+        multiselect: true,
+      },
+    });
+
+    network.on('stabilizationProgress', p => {
+      document.getElementById('poll-status').textContent =
+        `Rendering… ${Math.round(p.iterations / p.total * 100)}%`;
+    });
+    network.on('stabilizationIterationsDone', () => {
+      // Restore saved positions explicitly — vis.js may randomise physics:false
+      // nodes during stabilisation init in some builds.
+      const saved = savedPos();
+      nodesDS.update(nodesDS.getIds().map(id => {
+        const p = saved[id];
+        return p ? { id, x: p.x, y: p.y, physics: false } : { id, physics: false };
+      }));
+      savePositions();
+      document.getElementById('poll-status').textContent = '';
+      _applyViewFilter();
+      network.fit({ animation: { duration: 600 } });
+    });
+    network.on('dragEnd', savePositions);
+    window.addEventListener('beforeunload', savePositions);
+    network.on('click', onNodeClick);
+    network.on('doubleClick', () => {});
+
+  } else {
+    const existingIds = new Set(nodesDS.getIds());
+    const newIds      = new Set(currentData.nodes.map(n => n.id));
+
+    // Pass 1: existing nodes keep position; new nodes placed near already-existing neighbors
+    const needsPlace = new Set();
+    nodesDS.update(visNodes.map(n => {
+      if (existingIds.has(n.id)) {
+        const { x, y, physics, ...rest } = n;
+        return rest;
+      }
+      if (n.x !== undefined) return { ...n, physics: false };   // has saved position
+
+      const edge = currentData.edges.find(e => e.from === n.id || e.to === n.id);
+      const nbId  = edge ? (edge.from === n.id ? edge.to : edge.from) : null;
+      if (nbId && existingIds.has(nbId)) {
+        try {
+          const np = network.getPosition(nbId);
+          const a  = Math.random() * Math.PI * 2;
+          return { ...n, x: np.x + Math.cos(a) * 140, y: np.y + Math.sin(a) * 140, physics: false };
+        } catch {}
+      }
+      needsPlace.add(n.id);
+      return { ...n, physics: false };
+    }));
+
+    // Remove nodes that disappeared from topology
+    nodesDS.remove([...existingIds].filter(id => !newIds.has(id)));
+
+    // Replace edges (cheap, avoids stale links)
+    edgesDS.remove(edgesDS.getIds());
+    edgesDS.add(visEdges);
+
+    savePositions();
+
+    // Pass 2: nodes whose neighbor was also new — reposition now that all nodes exist
+    if (needsPlace.size) {
+      requestAnimationFrame(() => {
+        const updates = [];
+        for (const id of needsPlace) {
+          const edge = currentData.edges.find(e => e.from === id || e.to === id);
+          const nbId  = edge ? (edge.from === id ? edge.to : edge.from) : null;
+          if (!nbId) continue;
+          try {
+            const np = network.getPosition(nbId);
+            const a  = Math.random() * Math.PI * 2;
+            updates.push({ id, x: np.x + Math.cos(a) * 140, y: np.y + Math.sin(a) * 140 });
+          } catch {}
+        }
+        if (updates.length) { nodesDS.update(updates); savePositions(); }
+      });
+    }
+  }
+
+  updateStatusBar();
+  _applyViewFilter();
+  if (_vlanFilter) _applyVlanFilter();
+  else if (_macRouteHighlight) _applyMacHighlight(_macRouteHighlight.nodes, _macRouteHighlight.edges);
+  if (_currentEdgeId !== null) showEdgePanel(_currentEdgeId);
+}
+
+function updateStatusBar() {
+  const unreachable = currentData.nodes.filter(n => n.managed && !n.reachable).length;
+  const m = currentData.meta;
+  document.getElementById('s-nodes').textContent  = `Nodes: ${currentData.nodes.length}`;
+  document.getElementById('s-edges').textContent  = `Links: ${currentData.edges.length}`;
+  document.getElementById('s-unreach').innerHTML  = unreachable > 0
+    ? `<span style="color:#d29922">⚠ Unreachable: ${unreachable}</span>`
+    : `Unreachable: 0`;
+  if (m) {
+    if (m.polled_at)    _lastUpdateTs = new Date(m.polled_at).getTime();
+    if (m.poll_interval) _pollInterval = m.poll_interval;
+    const dur = m.duration_s != null ? ` (${m.duration_s}s)` : '';
+    document.getElementById('s-poll').innerHTML  = m.unreachable_count > 0
+      ? `<span style="color:#d29922">Polled: ${m.reachable_count}/${m.total}${dur}</span>`
+      : `Polled: ${m.reachable_count}/${m.total}${dur}`;
+    document.getElementById('s-updated').textContent = `Updated: ${new Date(m.polled_at).toLocaleTimeString()}`;
+    document.getElementById('s-macs').textContent = m.mac_total != null
+      ? `MACs: ${m.mac_total} · ${m.mac_edge} edge` : 'MACs: —';
+  } else {
+    document.getElementById('s-poll').textContent   = '';
+    document.getElementById('s-updated').textContent = `Updated: ${new Date().toLocaleTimeString()}`;
+  }
+}
+
+let _npActiveTab = 'info';
+
+function npTab(name) {
+  _npActiveTab = name;
+  ['info', 'lldp', 'traffic', 'vlan', 'mac'].forEach((t, i) => {
+    document.getElementById('np-pane-' + t).style.display = t === name ? '' : 'none';
+    document.querySelectorAll('.np-tab')[i].classList.toggle('active', t === name);
+  });
+  if (name === 'mac' && _currentNodeId) _renderMacTab(_currentNodeId);
+}
+
+function _renderVlanTab(nodeId) {
+  const node  = currentData.nodes.find(n => n.id === nodeId);
+  const vlans = node?.vlans || [];
+  const el    = document.getElementById('np-vlan-content');
+
+  if (!vlans.length) {
+    el.innerHTML = '<div style="color:#484f58;font-size:12px;padding:8px 0">Нет данных VLAN</div>';
+    return;
+  }
+
+  const portNames = node?.port_names || {};
+  const pvid      = node?.port_pvid  || {};
+
+  function portLabel(num) {
+    const n = portNames[String(num)];
+    return escHtml(n || String(num));
+  }
+
+  el.innerHTML = vlans.map(v => {
+    const untaggedSet = new Set(v.untagged);
+    const tagged      = v.egress.filter(p => !untaggedSet.has(p));
+    let portsHtml = '';
+    if (v.untagged.length)
+      portsHtml += `<div class="vlan-ports"><span class="vlan-mode access">access</span>${v.untagged.map(portLabel).join(', ')}</div>`;
+    if (tagged.length)
+      portsHtml += `<div class="vlan-ports"><span class="vlan-mode trunk">trunk</span>${tagged.map(portLabel).join(', ')}</div>`;
+    return `<div class="vlan-row">
+      <div class="vlan-header"><span class="vlan-id">${v.id}</span><span class="vlan-name">${escHtml(v.name)}</span></div>
+      ${portsHtml}
+    </div>`;
+  }).join('');
+}
+
+function _renderLldpTab(nodeId) {
+  const links = currentData.edges.filter(e => e.from === nodeId || e.to === nodeId);
+  if (!links.length) {
+    document.getElementById('np-lldp-content').innerHTML =
+      '<div style="color:#484f58;font-size:12px;padding:8px 0">Нет LLDP-соседей</div>';
+    return;
+  }
+  const rows = links.map(e => {
+    const isFrom  = e.from === nodeId;
+    const locPort = escHtml(isFrom ? (e.local_port || '?') : (e.remote_port || '?'));
+    const remId   = isFrom ? e.to : e.from;
+    const remNode = currentData.nodes.find(n => n.id === remId);
+    const remName = escHtml(remNode?.label || remId);
+    const remPort = escHtml(isFrom ? (e.remote_port || '?') : (e.local_port || '?'));
+    const speed   = escHtml(e.local_port_speed || '—');
+    const stp     = e.stp_state && e.stp_state !== 'forwarding'
+      ? `<span style="color:${e.stp_state==='blocking'?'#8957e5':'#e3b341'}">${escHtml(e.stp_state)}</span>` : '';
+    return `<tr>
+      <td title="${locPort}">${locPort}</td>
+      <td title="${remName}" style="max-width:130px">${remName}</td>
+      <td class="dim" title="${remPort}">${remPort}</td>
+      <td class="dim">${speed}</td>
+      <td>${stp}</td>
+    </tr>`;
+  }).join('');
+  document.getElementById('np-lldp-content').innerHTML =
+    `<table class="lldp-table">
+      <colgroup>
+        <col style="width:18%"><col style="width:36%"><col style="width:22%">
+        <col style="width:13%"><col style="width:11%">
+      </colgroup>
+      <thead><tr>
+        <th>Local</th><th>Neighbor</th><th>Nbr port</th><th>Speed</th><th>STP</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function _renderTrafficTab(nodeId) {
+  const links = currentData.edges.filter(e => e.from === nodeId && !e.cached);
+  const withData = links.filter(e => e.in_bps != null || e.out_bps != null);
+  if (!withData.length) {
+    document.getElementById('np-traffic-content').innerHTML =
+      '<div style="color:#484f58;font-size:12px;padding:8px 0">Нет данных трафика</div>';
+    return;
+  }
+  withData.sort((a, b) =>
+    Math.max(b.in_bps || 0, b.out_bps || 0) - Math.max(a.in_bps || 0, a.out_bps || 0));
+  const maxBps = Math.max(...withData.map(e => Math.max(e.in_bps || 0, e.out_bps || 0)), 1);
+  const rows = withData.map(e => {
+    const outPct = ((e.out_bps || 0) / maxBps * 100).toFixed(1);
+    const inPct  = ((e.in_bps  || 0) / maxBps * 100).toFixed(1);
+    const remNode = currentData.nodes.find(n => n.id === e.to);
+    const remName = remNode?.label || e.to;
+    const portLabel = escHtml(e.local_port || e.local_port_num || '?');
+    return `<div class="tr-row">
+      <span class="tr-port" title="${escHtml(remName)}">${portLabel}</span>
+      <div class="tr-bar-wrap">
+        <div class="tr-bar-bg"><div class="tr-bar-fill" style="width:${outPct}%;background:#3fb950"></div></div>
+        <div class="tr-bar-bg"><div class="tr-bar-fill" style="width:${inPct}%;background:#388bfd"></div></div>
+      </div>
+      <span class="tr-val">${_fmtBps(Math.max(e.out_bps || 0, e.in_bps || 0))}</span>
+    </div>`;
+  }).join('');
+  document.getElementById('np-traffic-content').innerHTML =
+    `<div style="font-size:10px;color:#484f58;margin-bottom:6px">
+      <span style="color:#3fb950">─ ↑out</span>&nbsp;&nbsp;<span style="color:#388bfd">─ ↓in</span>
+     </div>${rows}`;
+}
+
+let _macTabData = [];
+let _macSortCol = 'port_name';
+let _macSortDir = 1;
+
+function _renderMacTable() {
+  const el = document.getElementById('np-mac-content');
+  const sorted = [..._macTabData].sort((a, b) => {
+    if (_macSortCol === 'vlan_id') {
+      return ((a.vlan_id ?? 0) - (b.vlan_id ?? 0)) * _macSortDir;
+    }
+    const va = String(a[_macSortCol] ?? '');
+    const vb = String(b[_macSortCol] ?? '');
+    return va.localeCompare(vb, undefined, { numeric: true, sensitivity: 'base' }) * _macSortDir;
+  });
+  const th = (col, label) => {
+    const arrow = _macSortCol === col ? (_macSortDir === 1 ? ' ↑' : ' ↓') : '';
+    return `<th style="cursor:pointer;user-select:none" onclick="sortMacTab('${col}')">${label}${arrow}</th>`;
+  };
+  const rows = sorted.map(m => `<tr>
+    <td style="color:#f0c040;font-family:monospace">${escHtml(m.mac)}</td>
+    <td class="dim">${escHtml(m.port_name)}</td>
+    <td class="dim">${m.vlan_id ?? '—'}</td>
+  </tr>`).join('');
+  el.innerHTML = `
+    <div style="font-size:11px;color:#484f58;margin-bottom:6px">${_macTabData.length} edge MAC-адресов</div>
+    <table class="lldp-table">
+      <colgroup><col style="width:52%"><col style="width:30%"><col style="width:18%"></colgroup>
+      <thead><tr>${th('mac','MAC')}${th('port_name','Port')}${th('vlan_id','VLAN')}</tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function sortMacTab(col) {
+  if (_macSortCol === col) _macSortDir = -_macSortDir;
+  else { _macSortCol = col; _macSortDir = 1; }
+  _renderMacTable();
+}
+
+async function _renderMacTab(nodeId) {
+  const el   = document.getElementById('np-mac-content');
+  const node = currentData.nodes.find(n => n.id === nodeId);
+  _macTabData = [];
+  if (!node?.ip) {
+    el.innerHTML = '<div style="color:#484f58;font-size:12px;padding:8px 0">Нет данных (нет IP)</div>';
+    return;
+  }
+  el.innerHTML = '<div style="color:#484f58;font-size:12px;padding:8px 0">Загрузка…</div>';
+  try {
+    const r = await fetch(`/api/switch_macs?switch_ip=${encodeURIComponent(node.ip)}`);
+    _macTabData = await r.json();
+  } catch {
+    el.innerHTML = '<div style="color:#f85149;font-size:12px;padding:8px 0">Ошибка загрузки</div>';
+    return;
+  }
+  if (!_macTabData.length) {
+    el.innerHTML = '<div style="color:#484f58;font-size:12px;padding:8px 0">Нет edge MAC-адресов</div>';
+    return;
+  }
+  _renderMacTable();
+}
+
+function onNodeClick(params) {
+  if (!params.nodes.length) {
+    closePanel();
+    if (params.edges.length) showEdgePanel(params.edges[0]);
+    else closeEdgePanel();
+    return;
+  }
+  closeEdgePanel();
+  const nodeId = params.nodes[0];
+
+  if (_devicesBySwitchId?.has(nodeId)) {
+    const clickY = params.pointer.canvas.y;
+    const nodeY  = network.getPosition(nodeId).y;
+    if (clickY > nodeY + 6) {
+      _toggleSwitchDevices(nodeId);
+      return;
+    }
+  }
+
+  _currentNodeId = nodeId;
+  const node = currentData.nodes.find(n => n.id === nodeId);
+  if (!node) return;
+
+  document.getElementById('np-name').textContent   = node.label || node.id;
+  document.getElementById('np-ip').textContent     = node.ip || '—';
+  document.getElementById('np-status').innerHTML   = node.reachable
+    ? '<span class="badge-ok">✓ Reachable</span>'
+    : '<span class="badge-err">✗ Unreachable</span>';
+  document.getElementById('np-managed').textContent = node.managed ? 'Managed' : 'LLDP neighbor only';
+
+  const macRow = document.getElementById('np-mac-row');
+  if (node.mac_total != null) {
+    document.getElementById('np-mac').textContent = `${node.mac_total} total · ${node.mac_edge} edge`;
+    macRow.style.display = '';
+  } else {
+    macRow.style.display = 'none';
+  }
+
+  document.getElementById('np-role-select').value = node.node_type || 'other';
+  document.getElementById('np-role-auto').textContent = node.node_type_manual ? '' : 'auto';
+
+  const descrRow = document.getElementById('np-descr-row');
+  if (node.descr) {
+    document.getElementById('np-descr').textContent = node.descr;
+    descrRow.style.display = '';
+  } else {
+    descrRow.style.display = 'none';
+  }
+
+  const addBtn = document.getElementById('btn-add-monitor');
+  const addStatus = document.getElementById('np-add-status');
+  addStatus.textContent = '';
+  if (!node.managed && node.ip) {
+    addBtn.style.display = 'block';
+    addBtn.disabled = false;
+    addBtn.textContent = '+ Add to monitoring';
+    addBtn.dataset.ip = node.ip;
+  } else {
+    addBtn.style.display = 'none';
+  }
+
+  _renderLldpTab(nodeId);
+  _renderTrafficTab(nodeId);
+  _renderVlanTab(nodeId);
+  document.getElementById('np-mac-content').innerHTML = '';
+  npTab('info');
+
+  document.getElementById('node-panel').style.display = 'flex';
+}
+
+function closePanel() {
+  document.getElementById('node-panel').style.display = 'none';
+  if (network) network.unselectAll();
+}
+
+function showEdgePanel(edgeVisId) {
+  const raw = currentData.edges[edgeVisId];
+  if (!raw) { closeEdgePanel(); return; }
+  _currentEdgeId = edgeVisId;
+
+  const fromNode = currentData.nodes.find(n => n.id === raw.from);
+  const toNode   = currentData.nodes.find(n => n.id === raw.to);
+  const fromName = fromNode?.label || raw.from;
+  const toName   = toNode?.label   || raw.to;
+  const lp = raw.local_port || '?', rp = raw.remote_port || '?';
+
+  document.getElementById('ep-ports').textContent = `${lp} ↔ ${rp}`;
+  document.getElementById('ep-from').textContent  = fromName;
+  document.getElementById('ep-to').textContent    = toName;
+
+  const speed = raw.local_port_speed || '—';
+  const portDown = !raw.cached && raw.local_port_status === '2';
+  document.getElementById('ep-speed').textContent = speed;
+  document.getElementById('ep-status').innerHTML  = portDown
+    ? '<span class="badge-err">✗ Down</span>'
+    : '<span class="badge-ok">✓ Up</span>';
+
+  const inBps = raw.in_bps, outBps = raw.out_bps;
+  const speedBps = _speedBps(speed);
+  const fmt = (bps) => {
+    if (bps == null) return '—';
+    const pct = speedBps > 0 ? ` (${(bps / speedBps * 100).toFixed(1)}%)` : '';
+    return _fmtBps(bps) + pct;
+  };
+  document.getElementById('ep-out').textContent = fmt(outBps);
+  document.getElementById('ep-in').textContent  = fmt(inBps);
+
+  const errOut = raw.out_err_s, errIn = raw.in_err_s;
+  const fmtErr = v => v != null ? v.toFixed(2) + ' /s' : '—';
+  document.getElementById('ep-err-out').textContent = fmtErr(errOut);
+  document.getElementById('ep-err-in').textContent  = fmtErr(errIn);
+
+  const stpRow = document.getElementById('ep-stp-row');
+  if (raw.stp_state) {
+    stpRow.style.display = '';
+    document.getElementById('ep-stp').textContent = raw.stp_state;
+  } else {
+    stpRow.style.display = 'none';
+  }
+
+  const cachedRow = document.getElementById('ep-cached-row');
+  if (raw.cached) {
+    cachedRow.style.display = '';
+    const ls = raw.last_seen ? new Date(raw.last_seen).toLocaleString() : '—';
+    cachedRow.textContent = `Cached · last seen: ${ls}`;
+  } else {
+    cachedRow.style.display = 'none';
+  }
+
+  const canRefresh = !raw.cached && !!raw.switch_ip && !!raw.local_port_num;
+  document.getElementById('ep-refresh-btn').style.display = canRefresh ? '' : 'none';
+  document.getElementById('ep-refresh-status').textContent = '';
+
+  const hasChart = canRefresh;
+  document.getElementById('ep-chart-wrap').style.display = hasChart ? '' : 'none';
+
+  document.getElementById('edge-panel').style.display = 'flex';
+  _updateEdgePanelTimer();
+
+  if (hasChart) _loadPanelChart(raw.switch_ip, raw.local_port_num, edgeVisId);
+}
+
+async function refreshLinkCounters() {
+  if (_currentEdgeId === null) return;
+  const raw = currentData.edges[_currentEdgeId];
+  if (!raw || !raw.switch_ip || !raw.local_port_num) return;
+
+  const btn    = document.getElementById('ep-refresh-btn');
+  const status = document.getElementById('ep-refresh-status');
+  btn.disabled = true;
+  btn.textContent = '↻ Polling…';
+  status.style.color = '#8b949e';
+  status.textContent = '';
+
+  try {
+    const resp = await fetch('/api/refresh_link', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ switch_ip: raw.switch_ip, port_num: raw.local_port_num }),
+    });
+    const data = await resp.json();
+
+    if (data.error) {
+      status.style.color = '#f85149';
+      status.textContent = 'Switch unreachable';
+    } else {
+      // Patch currentData edge with fresh counters
+      currentData.edges[_currentEdgeId] = {
+        ...raw, in_bps: data.in_bps, out_bps: data.out_bps,
+        in_err_s: data.in_err_s, out_err_s: data.out_err_s,
+      };
+      // Refresh panel and graph edge color/label
+      showEdgePanel(_currentEdgeId);
+      const updatedEdge = buildVisEdges(currentData)[_currentEdgeId];
+      if (updatedEdge && edgesDS) edgesDS.update([updatedEdge]);
+      status.style.color = '#3fb950';
+      status.textContent = '✓ Updated ' + new Date().toLocaleTimeString();
+    }
+  } catch {
+    status.style.color = '#f85149';
+    status.textContent = 'Request failed';
+  }
+
+  btn.disabled = false;
+  btn.textContent = '↻ Refresh counters';
+}
+
+function closeEdgePanel() {
+  document.getElementById('edge-panel').style.display = 'none';
+  _currentEdgeId = null;
+}
+
+function _fmtCountdown(s) {
+  if (s <= 0) return 'Polling…';
+  if (s >= 60) return `${Math.floor(s / 60)}m ${s % 60}s`;
+  return `${s}s`;
+}
+
+function _updateEdgePanelTimer() {
+  if (_currentEdgeId === null || !_lastUpdateTs) return;
+  const elapsed   = Math.round((Date.now() - _lastUpdateTs) / 1000);
+  const remaining = _pollInterval - elapsed;
+  document.getElementById('ep-updated').textContent = new Date(_lastUpdateTs).toLocaleTimeString();
+  document.getElementById('ep-next').textContent    = _fmtCountdown(remaining);
+}
+
+setInterval(_updateEdgePanelTimer, 1000);
+
+async function setNodeType(value) {
+  const nodeId = _currentNodeId;
+  if (!nodeId) return;
+  try {
+    const r = await fetch(`/api/nodes/${encodeURIComponent(nodeId)}`, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({node_type: value}),
+    });
+    if (!r.ok) return;
+    const node = currentData?.nodes?.find(n => n.id === nodeId);
+    if (node) { node.node_type = value; node.node_type_manual = true; }
+    document.getElementById('np-role-auto').textContent = '';
+    const vis = nodesDS?.get(nodeId);
+    if (vis?._raw) {
+      vis._raw.node_type = value;
+      vis._raw.node_type_manual = true;
+      const style = _nodeVisStyle(vis._raw);
+      nodesDS.update({ id: nodeId, label: _makeBaseLabel(vis._raw, nodeId), ...style });
+    }
+  } catch(e) { console.error('setNodeType:', e); }
+}
+
+async function deleteNode() {
+  const nodeId = _currentNodeId;
+  if (!nodeId || !nodesDS) return;
+  if (network?.isCluster(nodeId)) return;
+
+  const node = currentData.nodes.find(n => n.id === nodeId);
+
+  // Remove edges connected to this node
+  const edgeIds = edgesDS.getIds({ filter: e => e.from === nodeId || e.to === nodeId });
+  edgesDS.remove(edgeIds);
+  currentData.edges = currentData.edges.filter(e => e.from !== nodeId && e.to !== nodeId);
+
+  // Remove node
+  nodesDS.remove(nodeId);
+  currentData.nodes = currentData.nodes.filter(n => n.id !== nodeId);
+
+  closePanel();
+
+  // If it's a managed node with an IP, also remove from extra_switches.txt
+  if (node?.managed && node?.ip) {
+    await fetch('/api/switch', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ip: node.ip }),
+    });
+  }
+}
+
+let _searchActive = -1;
+
+function searchNode(q) {
+  if (!network || !nodesDS) return;
+  _searchActive = -1;
+  const dropdown = document.getElementById('search-results');
+  if (!q) { network.unselectAll(); dropdown.style.display = 'none'; return; }
+
+  const ql = q.toLowerCase();
+  const found = nodesDS.get({ filter: n => n.label.toLowerCase().includes(ql) });
+  if (!found.length) { dropdown.style.display = 'none'; return; }
+
+  dropdown.innerHTML = '';
+  found.forEach((n, i) => {
+    const div = document.createElement('div');
+    div.className = 'sr-item';
+    div.dataset.nodeId = n.id;
+    div.dataset.idx = i;
+    const ip = n._raw?.ip ? `<span class="sr-ip">${escHtml(n._raw.ip)}</span>` : '';
+    const displayName = n._raw?.label || n.id;
+    div.innerHTML = `${escHtml(displayName)}${ip}`;
+    div.addEventListener('mousedown', e => { e.preventDefault(); selectSearchResult(n.id); });
+    dropdown.appendChild(div);
+  });
+  dropdown.style.display = 'block';
+}
+
+function searchKey(e) {
+  const dropdown = document.getElementById('search-results');
+  const items = dropdown.querySelectorAll('.sr-item');
+  if (!items.length) return;
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    _searchActive = Math.min(_searchActive + 1, items.length - 1);
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    _searchActive = Math.max(_searchActive - 1, 0);
+  } else if (e.key === 'Enter') {
+    if (_searchActive >= 0) selectSearchResult(items[_searchActive].dataset.nodeId);
+    else if (items.length === 1) selectSearchResult(items[0].dataset.nodeId);
+    return;
+  } else if (e.key === 'Escape') {
+    dropdown.style.display = 'none';
+    _searchActive = -1;
+    return;
+  } else { return; }
+  items.forEach((el, i) => el.classList.toggle('active', i === _searchActive));
+  items[_searchActive]?.scrollIntoView({ block: 'nearest' });
+}
+
+function selectSearchResult(id) {
+  document.getElementById('search-results').style.display = 'none';
+  const visNode = nodesDS?.get(id);
+  document.getElementById('search').value = visNode?._raw?.label || id;
+  _searchActive = -1;
+  network.focus(id, { scale: 1.5, animation: { duration: 400 } });
+  network.selectNodes([id]);
+  onNodeClick({ nodes: [id] });
+}
+
+function toggleOverflow() {
+  document.getElementById('overflow-menu').classList.toggle('open');
+}
+function closeOverflow() {
+  document.getElementById('overflow-menu').classList.remove('open');
+}
+
+// ── VLAN filter ───────────────────────────────────────────────────────────────
+let _vlanFilter = null;
+let _vlanIndex  = new Map();  // vlanId → { name, nodes: Set<nodeId> }
+let _vlanList   = [];         // [{id, name, count}] sorted by id
+let _vlanDdIdx  = -1;
+
+function buildVlanIndex(data) {
+  _vlanIndex = new Map();
+  for (const n of data.nodes) {
+    for (const v of (n.vlans || [])) {
+      if (!_vlanIndex.has(v.id)) _vlanIndex.set(v.id, { name: v.name, nodes: new Set() });
+      _vlanIndex.get(v.id).nodes.add(n.id);
+    }
+  }
+  _vlanList = [..._vlanIndex.entries()]
+    .map(([id, d]) => ({ id, name: d.name, count: d.nodes.size }))
+    .sort((a, b) => a.id - b.id);
+}
+
+function vlanInput(q) {
+  const dd = document.getElementById('vlan-dd');
+  const lc = q.toLowerCase();
+  const items = q
+    ? _vlanList.filter(v => String(v.id).startsWith(q) || v.name.toLowerCase().includes(lc))
+    : _vlanList;
+  if (!items.length) { dd.style.display = 'none'; return; }
+  _vlanDdIdx = -1;
+  dd.innerHTML = items.slice(0, 80).map(v =>
+    `<div class="vdd-item" onmousedown="selectVlan(${v.id})">
+       <span class="vdd-vid">${v.id}</span>
+       <span class="vdd-name">${escHtml(v.name)}</span>
+       <span class="vdd-cnt">${v.count}</span>
+     </div>`).join('');
+  dd.style.display = 'block';
+}
+
+function vlanKey(e) {
+  const items = document.querySelectorAll('#vlan-dd .vdd-item');
+  if (!items.length) return;
+  if (e.key === 'ArrowDown') {
+    _vlanDdIdx = Math.min(_vlanDdIdx + 1, items.length - 1);
+    items.forEach((el, i) => el.classList.toggle('vdd-hi', i === _vlanDdIdx));
+    e.preventDefault();
+  } else if (e.key === 'ArrowUp') {
+    _vlanDdIdx = Math.max(_vlanDdIdx - 1, 0);
+    items.forEach((el, i) => el.classList.toggle('vdd-hi', i === _vlanDdIdx));
+    e.preventDefault();
+  } else if (e.key === 'Enter') {
+    if (_vlanDdIdx >= 0) items[_vlanDdIdx].dispatchEvent(new MouseEvent('mousedown'));
+    e.preventDefault();
+  } else if (e.key === 'Escape') {
+    document.getElementById('vlan-dd').style.display = 'none';
+    document.getElementById('vlan-input').blur();
+  }
+}
+
+function selectVlan(vid) {
+  const entry = _vlanIndex.get(vid);
+  if (!entry) return;
+  // Clear MAC highlight if active
+  if (_macRouteHighlight) _clearMacHighlightState();
+  _vlanFilter = vid;
+  const inp = document.getElementById('vlan-input');
+  inp.value = `${vid} — ${entry.name}`;
+  inp.classList.add('vlan-active');
+  document.getElementById('vlan-x').style.display = 'block';
+  document.getElementById('vlan-dd').style.display = 'none';
+  _applyVlanFilter();
+}
+
+function clearVlanFilter() {
+  _vlanFilter = null;
+  const inp = document.getElementById('vlan-input');
+  inp.value = '';
+  inp.classList.remove('vlan-active');
+  document.getElementById('vlan-x').style.display = 'none';
+  document.getElementById('vlan-dd').style.display = 'none';
+  _restoreColors();
+}
+
+const _DIM_COLOR = {
+  background: '#161b22', border: '#21262d',
+  highlight: { background: '#1c2128', border: '#2d333b' },
+  hover:      { background: '#1c2128', border: '#2d333b' },
+};
+const _DIM_FONT  = { color: '#2d333b', size: 12 };
+const _DIM_EDGE  = { color: '#1c2128', hover: '#21262d', highlight: '#21262d' };
+
+function _applyVlanFilter() {
+  if (!_vlanFilter || !nodesDS) return;
+  const nodeIds = _vlanIndex.get(_vlanFilter)?.nodes ?? new Set();
+
+  const nodeUpd = [];
+  for (const id of nodesDS.getIds()) {
+    if (nodeIds.has(id)) {
+      const raw = nodesDS.get(id)?._raw;
+      if (!raw) continue;
+      const orig = buildVisNodes({ nodes: [raw] }, {})[0];
+      nodeUpd.push({ id, color: orig.color, font: { color: '#c9d1d9', size: 12 } });
+    } else {
+      nodeUpd.push({ id, color: _DIM_COLOR, font: _DIM_FONT });
+    }
+  }
+  nodesDS.update(nodeUpd);
+
+  const edgeUpd = [];
+  for (const id of edgesDS.getIds()) {
+    const e = edgesDS.get(id);
+    if (!nodeIds.has(e.from) || !nodeIds.has(e.to))
+      edgeUpd.push({ id, color: _DIM_EDGE, font: { color: '#1c2128' } });
+  }
+  edgesDS.update(edgeUpd);
+}
+
+function _restoreColors() {
+  if (!nodesDS) return;
+  nodesDS.update(
+    buildVisNodes(currentData, savedPos()).map(n => ({ id: n.id, color: n.color, font: n.font }))
+  );
+  setViewMode(_viewMode);
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
+document.addEventListener('click', e => {
+  if (!e.target.closest('#search-wrap'))
+    document.getElementById('search-results').style.display = 'none';
+  if (!e.target.closest('#vlan-filter-wrap'))
+    document.getElementById('vlan-dd').style.display = 'none';
+  if (!e.target.closest('#mac-filter-wrap'))
+    document.getElementById('mac-dd').style.display = 'none';
+  if (!e.target.closest('#overflow-wrap'))
+    closeOverflow();
+});
+
+async function triggerRefresh() {
+  const btn = document.getElementById('btn-refresh');
+  btn.disabled = true;
+  await fetch('/api/refresh', { method: 'POST' });
+  // SSE polling_started event will start the live timer
+  // Re-enable button when topology_updated arrives via loadTopology
+  const t = setInterval(() => {
+    if (!_pollTimer) { clearInterval(t); btn.disabled = false; }
+  }, 1000);
+  setTimeout(() => { clearInterval(t); btn.disabled = false; }, 120000);
+}
+
+loadTopology();
+
+// History panel
+const _HEV_ICONS = {
+  switch_down:     '🔴', switch_up:       '🟢',
+  switch_appeared: '🔵', switch_removed:  '⚫',
+  device_appeared: '➕', device_removed:  '➖',
+};
+let _historyOpen = false;
+
+function toggleHistory() {
+  _historyOpen = !_historyOpen;
+  const panel = document.getElementById('history-panel');
+  panel.style.display = _historyOpen ? 'flex' : 'none';
+  document.getElementById('btn-history').classList.toggle('btn-active', _historyOpen);
+  if (_historyOpen) loadHistory();
+}
+
+async function loadHistory() {
+  const resp = await fetch('/api/history?limit=80');
+  const events = await resp.json();
+  const list = document.getElementById('history-list');
+  if (!events.length) { list.innerHTML = '<div style="color:#484f58;font-size:12px;padding:4px 0">No events yet</div>'; return; }
+  list.innerHTML = events.map(ev => {
+    const icon  = _HEV_ICONS[ev.type] || '•';
+    const label = escHtml(ev.node_label || ev.node_id);
+    const ts    = new Date(ev.ts).toLocaleString();
+    const type  = ev.type.replace(/_/g, ' ');
+    return `<div class="hev">
+      <span class="hev-icon">${icon}</span>
+      <div class="hev-body">
+        <div class="hev-label">${label}</div>
+        <div class="hev-ts">${escHtml(type)} · ${escHtml(ts)}</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// SSE: live poll timer + topology reload
+const _evtSource = new EventSource('/api/events');
+let _pollTimer = null;
+
+_evtSource.addEventListener('polling_started', () => {
+  const t0 = Date.now();
+  document.getElementById('poll-status').textContent = 'Polling… 0s';
+  if (_pollTimer) clearInterval(_pollTimer);
+  _pollTimer = setInterval(() => {
+    const s = Math.round((Date.now() - t0) / 1000);
+    document.getElementById('poll-status').textContent = `Polling… ${s}s`;
+  }, 1000);
+});
+
+_evtSource.addEventListener('topology_updated', () => {
+  if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
+  loadTopology();
+  if (_historyOpen) loadHistory();
+});
+
+// 5-min fallback in case SSE connection is silently dropped
+setInterval(loadTopology, 300000);
+
+// ── View filter ───────────────────────────────────────────────────────────────
+const _ALL_NODE_TYPES = ['switch', 'router', 'wifi', 'other'];
+let _visibleTypes = new Set(
+  JSON.parse(localStorage.getItem('net-topo-visible') || '["switch","router"]')
+);
+
+function _saveVisibleTypes() {
+  localStorage.setItem('net-topo-visible', JSON.stringify([..._visibleTypes]));
+}
+
+function _initViewMenu() {
+  _ALL_NODE_TYPES.forEach(t => {
+    const cb = document.querySelector(`#view-menu input[value="${t}"]`);
+    if (cb) cb.checked = _visibleTypes.has(t);
+  });
+}
+_initViewMenu();
+
+function toggleViewMenu(e) {
+  e.stopPropagation();
+  const menu = document.getElementById('view-menu');
+  menu.style.display = menu.style.display === 'block' ? 'none' : 'block';
+}
+document.addEventListener('click', () => {
+  const menu = document.getElementById('view-menu');
+  if (menu) menu.style.display = 'none';
+});
+
+function toggleVisibleType(cb) {
+  if (cb.checked) _visibleTypes.add(cb.value);
+  else _visibleTypes.delete(cb.value);
+  _saveVisibleTypes();
+  _applyViewFilter();
+}
+
+function _devicesOfExpandedSwitches() {
+  const result = new Set();
+  _expandedSwitches.forEach(swId => _devicesBySwitchId?.get(swId)?.forEach(id => result.add(id)));
+  return result;
+}
+
+function _applyViewFilter() {
+  if (!network || !nodesDS) return;
+
+  _expandedSwitches.clear();
+
+  // Single batch: show/hide all nodes by node_type + restore base labels
+  const ids = nodesDS.getIds();
+  nodesDS.update(ids.map(id => {
+    const raw = nodesDS.get(id)?._raw;
+    return { id, hidden: !_visibleTypes.has(raw?.node_type || 'other'), label: _makeBaseLabel(raw, id) };
+  }));
+
+  // Badges on visible nodes with hidden neighbors
+  const newMap = new Map();
+  const seen = new Set();
+  const badgeUpdates = [];
+  ids.forEach(swId => {
+    if (nodesDS.get(swId)?.hidden) return;
+    const hiddenNbs = network.getConnectedNodes(swId).filter(id => nodesDS.get(id)?.hidden && !seen.has(id));
+    if (!hiddenNbs.length) return;
+    hiddenNbs.forEach(id => seen.add(id));
+    newMap.set(swId, new Set(hiddenNbs));
+    const raw = nodesDS.get(swId)?._raw;
+    const devTip = hiddenNbs.map(id => escHtml(nodesDS.get(id)?._raw?.label || id)).join('<br>');
+    badgeUpdates.push({
+      id: swId,
+      label: _makeBaseLabel(raw, swId) + '\n↳ ' + hiddenNbs.length + ' dev',
+      title: (nodesDS.get(swId).title || '') + '<hr style="border-color:#30363d;margin:4px 0">↳ ' + hiddenNbs.length + ' устройств<br>' + devTip,
+    });
+  });
+  if (badgeUpdates.length) nodesDS.update(badgeUpdates);
+  _devicesBySwitchId = newMap;
+}
+
+let _devicesBySwitchId = null;   // Map<switchId, Set<deviceId>>
+const _expandedSwitches = new Set();
+
+function _makeBaseLabel(raw, id) {
+  const displayName = raw?.label || id;
+  const shortName = displayName.length > 20 ? displayName.slice(0, 18) + '…' : displayName;
+  const sym = raw ? _typeSymbol(raw) : '';
+  if (raw?.ip) return sym + shortName + '\n' + raw.ip;
+  return (raw?.stp_root ? sym + '★ ' : sym) + shortName;
+}
+
+function _toggleSwitchDevices(switchId) {
+  const devices = _devicesBySwitchId?.get(switchId);
+  if (!devices || !devices.size) return;
+  const raw = nodesDS.get(switchId)?._raw;
+  const base = _makeBaseLabel(raw, switchId);
+
+  if (_expandedSwitches.has(switchId)) {
+    nodesDS.update([...devices].map(id => {
+      const dr = nodesDS.get(id)?._raw;
+      return { id, hidden: !_visibleTypes.has(dr?.node_type || 'other') };
+    }));
+    _expandedSwitches.delete(switchId);
+    const hiddenCount = [...devices].filter(id => {
+      const dr = nodesDS.get(id)?._raw;
+      return !_visibleTypes.has(dr?.node_type || 'other');
+    }).length;
+    nodesDS.update([{ id: switchId, label: base + (hiddenCount ? '\n↳ ' + hiddenCount + ' dev' : '') }]);
+  } else {
+    const sp = network.getPosition(switchId);
+    const arr = [...devices];
+    const r = 100 + Math.min(arr.length, 10) * 8;
+    nodesDS.update(arr.map((id, i) => {
+      const a = (2 * Math.PI * i) / arr.length;
+      return { id, hidden: false, x: sp.x + Math.cos(a) * r, y: sp.y + Math.sin(a) * r, physics: false };
+    }));
+    _expandedSwitches.add(switchId);
+    nodesDS.update([{ id: switchId, label: base + '\n↳ ' + devices.size + ' ▾' }]);
+  }
+}
+
+// ── Select mode ──────────────────────────────────────────────────────────────
+let _selectMode = false;
+let _selStart   = null;
+const _netEl  = document.getElementById('network');
+const _selRect = document.getElementById('sel-rect');
+
+function toggleSelectMode() {
+  _selectMode = !_selectMode;
+  document.getElementById('btn-select').classList.toggle('btn-active', _selectMode);
+  _netEl.style.cursor = _selectMode ? 'crosshair' : '';
+  if (network) network.setOptions({ interaction: { dragView: !_selectMode } });
+}
+
+function _domPos(e) {
+  const r = _netEl.getBoundingClientRect();
+  return { x: e.clientX - r.left, y: e.clientY - r.top };
+}
+
+_netEl.addEventListener('mousedown', e => {
+  if (!_selectMode || e.button !== 0) return;
+  const pos = _domPos(e);
+  if (network && network.getNodeAt(pos) !== undefined) return;
+  _selStart = pos;
+  e.preventDefault();
+});
+
+_netEl.addEventListener('mousemove', e => {
+  if (!_selStart) return;
+  const cur = _domPos(e);
+  _selRect.setAttribute('x',      Math.min(_selStart.x, cur.x));
+  _selRect.setAttribute('y',      Math.min(_selStart.y, cur.y));
+  _selRect.setAttribute('width',  Math.abs(cur.x - _selStart.x));
+  _selRect.setAttribute('height', Math.abs(cur.y - _selStart.y));
+  _selRect.style.display = '';
+});
+
+// ── Traffic chart ────────────────────────────────────────────────────────────
+let _chartData    = null;
+let _chartEdgeId  = null;
+let _cmHours      = 24;
+
+function drawTrafficChart(canvas, data, opts = {}) {
+  const dpr = window.devicePixelRatio || 1;
+  const W   = canvas.clientWidth  || 248;
+  const H   = canvas.clientHeight || 70;
+  canvas.width  = W * dpr;
+  canvas.height = H * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  const hasLabels = !!opts.labels;
+  const PAD = {
+    top:    hasLabels ? 10 : 4,
+    right:  hasLabels ? 10 : 4,
+    bottom: hasLabels ? 26 : 4,
+    left:   hasLabels ? 50 : 4,
+  };
+
+  ctx.fillStyle = '#0d1117';
+  ctx.fillRect(0, 0, W, H);
+
+  if (!data || !data.length) {
+    ctx.fillStyle = '#484f58';
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(data === null ? 'Loading…' : 'No data yet', W / 2, H / 2);
+    return;
+  }
+
+  const times   = data.map(d => new Date(d.ts).getTime());
+  const inVals  = data.map(d => d.in_bps  ?? 0);
+  const outVals = data.map(d => d.out_bps ?? 0);
+  const tMin    = times[0];
+  const tMax    = times[times.length - 1] || tMin + 1;
+  const maxBps  = Math.max(...inVals, ...outVals, 1);
+  const pW = W - PAD.left - PAD.right;
+  const pH = H - PAD.top  - PAD.bottom;
+  const tx = t => PAD.left + (t - tMin) / (tMax - tMin) * pW;
+  const ty = v => PAD.top  + (1 - v / maxBps) * pH;
+
+  if (hasLabels) {
+    ctx.strokeStyle = '#21262d';
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= 4; i++) {
+      const y = PAD.top + pH * i / 4;
+      ctx.beginPath(); ctx.moveTo(PAD.left, y); ctx.lineTo(W - PAD.right, y); ctx.stroke();
+      ctx.fillStyle = '#484f58'; ctx.font = '10px sans-serif';
+      ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+      ctx.fillText(_fmtBps(maxBps * (1 - i / 4)), PAD.left - 4, y);
+    }
+    const xSteps = Math.min(5, data.length - 1);
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    for (let i = 0; i <= xSteps; i++) {
+      const t = tMin + (tMax - tMin) * i / xSteps;
+      ctx.fillStyle = '#484f58';
+      ctx.fillText(new Date(t).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}),
+                   tx(t), H - PAD.bottom + 4);
+    }
+  }
+
+  function drawSeries(vals, strokeColor, fillColor) {
+    ctx.beginPath();
+    data.forEach((_, i) => {
+      const x = tx(times[i]), y = ty(vals[i]);
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    });
+    ctx.lineTo(tx(tMax), PAD.top + pH);
+    ctx.lineTo(PAD.left, PAD.top + pH);
+    ctx.closePath();
+    ctx.fillStyle = fillColor; ctx.fill();
+    ctx.beginPath();
+    data.forEach((_, i) => {
+      const x = tx(times[i]), y = ty(vals[i]);
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    });
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth = opts.lineWidth || 1.5;
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+  }
+
+  drawSeries(outVals, '#3fb950', 'rgba(63,185,80,0.10)');
+  drawSeries(inVals,  '#388bfd', 'rgba(56,139,253,0.10)');
+}
+
+async function _loadPanelChart(switchIp, portNum, edgeId) {
+  const canvas = document.getElementById('ep-chart');
+  _chartData = null;
+  drawTrafficChart(canvas, null);
+  try {
+    const r = await fetch(`/api/link_traffic?switch_ip=${encodeURIComponent(switchIp)}&port_num=${encodeURIComponent(portNum)}&hours=24`);
+    _chartData = await r.json();
+  } catch { _chartData = []; }
+  if (_currentEdgeId === edgeId) drawTrafficChart(canvas, _chartData, { lineWidth: 1.5 });
+}
+
+async function expandChart() {
+  if (_currentEdgeId === null) return;
+  const raw      = currentData.edges[_currentEdgeId];
+  const fromNode = currentData.nodes.find(n => n.id === raw?.from);
+  const toNode   = currentData.nodes.find(n => n.id === raw?.to);
+  document.getElementById('cm-title').textContent =
+    `${fromNode?.label || raw?.from} : ${raw?.local_port || '?'} ↔ ${toNode?.label || raw?.to} : ${raw?.remote_port || '?'}`;
+
+  const modal = document.getElementById('chart-modal');
+  modal.classList.add('open');
+
+  const ranges = [{h:2,l:'2h'},{h:6,l:'6h'},{h:24,l:'24h'},{h:168,l:'7d'}];
+  const rWrap  = document.getElementById('cm-ranges');
+  rWrap.innerHTML = '';
+  ranges.forEach(r => {
+    const b = document.createElement('button');
+    b.className = 'cm-range-btn' + (r.h === _cmHours ? ' btn-active' : '');
+    b.textContent = r.l;
+    b.onclick = () => _loadExpandedChart(r.h);
+    rWrap.appendChild(b);
+  });
+
+  await _loadExpandedChart(_cmHours);
+}
+
+async function _loadExpandedChart(hours) {
+  _cmHours = hours;
+  document.querySelectorAll('.cm-range-btn').forEach(b => {
+    b.classList.toggle('btn-active', b.textContent === ({2:'2h',6:'6h',24:'24h',168:'7d'}[hours]));
+  });
+  const raw = currentData.edges[_currentEdgeId];
+  if (!raw?.switch_ip) return;
+  const canvas = document.getElementById('cm-chart');
+  drawTrafficChart(canvas, null, { labels: true });
+  try {
+    const r = await fetch(`/api/link_traffic?switch_ip=${encodeURIComponent(raw.switch_ip)}&port_num=${encodeURIComponent(raw.local_port_num)}&hours=${hours}`);
+    const data = await r.json();
+    drawTrafficChart(canvas, data, { labels: true, lineWidth: 2 });
+  } catch { drawTrafficChart(canvas, [], { labels: true }); }
+}
+
+function closeChartModal() {
+  document.getElementById('chart-modal').classList.remove('open');
+}
+
+document.getElementById('chart-modal').addEventListener('click', e => {
+  if (e.target === document.getElementById('chart-modal')) closeChartModal();
+});
+
+document.addEventListener('mouseup', e => {
+  if (!_selStart) return;
+  _selRect.style.display = 'none';
+  if (network && e.button === 0) {
+    const cur = _domPos(e);
+    const c1  = network.DOMtoCanvas({ x: Math.min(_selStart.x, cur.x), y: Math.min(_selStart.y, cur.y) });
+    const c2  = network.DOMtoCanvas({ x: Math.max(_selStart.x, cur.x), y: Math.max(_selStart.y, cur.y) });
+    const ids = Object.entries(network.getPositions())
+      .filter(([, p]) => p.x >= c1.x && p.x <= c2.x && p.y >= c1.y && p.y <= c2.y)
+      .map(([id]) => id);
+    if (ids.length) network.selectNodes(ids, false);
+  }
+  _selStart = null;
+});
+
+// ── Statistics dashboard ─────────────────────────────────────────────────────
+let _statsHours = 24;
+
+function drawHBarChart(canvas, rows, opts = {}) {
+  const dpr    = window.devicePixelRatio || 1;
+  const ROW_H  = 32;
+  const LABEL_W = opts.labelWidth || 180;
+  const VAL_W  = 60;
+  const PAD    = { top: 6, bottom: 6 };
+  const W      = canvas.parentElement.clientWidth || 680;
+  const H      = PAD.top + rows.length * ROW_H + PAD.bottom;
+  canvas.width  = W * dpr;
+  canvas.height = H * dpr;
+  canvas.style.height = H + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  ctx.fillStyle = '#0d1117';
+  ctx.fillRect(0, 0, W, H);
+
+  if (!rows.length) {
+    ctx.fillStyle = '#484f58';
+    ctx.font = '12px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Нет данных за выбранный период', W / 2, H / 2);
+    return;
+  }
+
+  const bW    = W - LABEL_W - VAL_W - 8;
+  const maxV  = Math.max(...rows.map(r => Math.max(r.v1 || 0, r.v2 || 0)), 1);
+  const BAR_H = 9;
+  const GAP   = 3;
+
+  rows.forEach((r, i) => {
+    const midY = PAD.top + i * ROW_H + ROW_H / 2;
+
+    // Label
+    ctx.fillStyle = '#8b949e';
+    ctx.font = '11px monospace';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    const lbl = r.label.length > 26 ? r.label.slice(0, 24) + '…' : r.label;
+    ctx.fillText(lbl, LABEL_W - 8, midY);
+
+    // Background track
+    ctx.fillStyle = '#21262d';
+    ctx.fillRect(LABEL_W, midY - BAR_H - GAP / 2, bW, BAR_H);
+    ctx.fillRect(LABEL_W, midY + GAP / 2,          bW, BAR_H);
+
+    // Bar 1 (out / total)
+    const w1 = (r.v1 || 0) / maxV * bW;
+    ctx.fillStyle = opts.color1 || '#3fb950';
+    ctx.fillRect(LABEL_W, midY - BAR_H - GAP / 2, w1, BAR_H);
+
+    // Bar 2 (in) — only if provided
+    if (r.v2 !== undefined) {
+      const w2 = (r.v2 || 0) / maxV * bW;
+      ctx.fillStyle = opts.color2 || '#388bfd';
+      ctx.fillRect(LABEL_W, midY + GAP / 2, w2, BAR_H);
+    }
+
+    // Value label
+    ctx.fillStyle = '#6e7681';
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    const dispVal = Math.max(r.v1 || 0, r.v2 || 0);
+    ctx.fillText(_fmtBps(dispVal), LABEL_W + bW + 6, midY);
+  });
+}
+
+async function _loadStats() {
+  const [portsResp, switchResp] = await Promise.all([
+    fetch(`/api/stats/top_ports?hours=${_statsHours}&limit=10`),
+    fetch(`/api/stats/switch_traffic?hours=${_statsHours}`),
+  ]);
+  const ports   = await portsResp.json();
+  const switches = await switchResp.json();
+
+  // Top ports chart
+  const portRows = ports.map(p => ({
+    label: `${escHtml(p.switch_name)} : ${escHtml(p.port_name || p.port_num)}`,
+    v1: p.avg_out,
+    v2: p.avg_in,
+  }));
+  drawHBarChart(document.getElementById('stats-ports-canvas'), portRows, {
+    labelWidth: 220, color1: '#3fb950', color2: '#388bfd',
+  });
+
+  // Switch chart
+  const swRows = switches.map(s => ({
+    label: escHtml(s.switch_name),
+    v1: (s.avg_in || 0) + (s.avg_out || 0),
+  }));
+  drawHBarChart(document.getElementById('stats-switch-canvas'), swRows, {
+    labelWidth: 180, color1: '#8957e5',
+  });
+}
+
+function _buildStatsRanges() {
+  const wrap = document.getElementById('stats-ranges');
+  wrap.innerHTML = '';
+  [{h: 2, l: '2h'}, {h: 6, l: '6h'}, {h: 24, l: '24h'}, {h: 168, l: '7d'}].forEach(r => {
+    const b = document.createElement('button');
+    b.className = 'cm-range-btn' + (r.h === _statsHours ? ' btn-active' : '');
+    b.textContent = r.l;
+    b.onclick = () => {
+      _statsHours = r.h;
+      _buildStatsRanges();
+      _loadStats();
+    };
+    wrap.appendChild(b);
+  });
+}
+
+function openStats() {
+  document.getElementById('stats-modal').classList.add('open');
+  _buildStatsRanges();
+  _loadStats();
+}
+
+function closeStats() {
+  document.getElementById('stats-modal').classList.remove('open');
+}
+
+document.getElementById('stats-modal').addEventListener('click', e => {
+  if (e.target === document.getElementById('stats-modal')) closeStats();
+});
+
+// ── MAC search & route ────────────────────────────────────────────────────────
+let _macDdIdx = -1;
+
+const _MAC_NODE_COLOR = {
+  background: '#3a3000', border: '#f0c040',
+  highlight: { background: '#4a4000', border: '#f0c040' },
+  hover:      { background: '#4a4000', border: '#f0c040' },
+};
+const _MAC_EDGE_COLOR = { color: '#f0c040', hover: '#f0c040', highlight: '#f0c040' };
+
+function _macNormForSearch(raw) {
+  const h = raw.toLowerCase().replace(/[^0-9a-f]/g, '');
+  if (!h) return raw;
+  const parts = [];
+  for (let i = 0; i < h.length && parts.length < 6; i += 2)
+    parts.push(h.slice(i, i + 2));
+  return parts.join(':');
+}
+
+async function macInput(raw) {
+  const dd = document.getElementById('mac-dd');
+  if (raw.length < 2) { dd.style.display = 'none'; return; }
+  const q = _macNormForSearch(raw);
+  if (q.length < 2) { dd.style.display = 'none'; return; }
+
+  let results = [];
+  try {
+    const r = await fetch(`/api/mac_search?q=${encodeURIComponent(q)}&limit=20`);
+    results = await r.json();
+  } catch { results = []; }
+
+  if (!results.length) { dd.style.display = 'none'; return; }
+  _macDdIdx = -1;
+
+  // Group by MAC, show switch that has is_edge=1
+  const byMac = new Map();
+  for (const e of results) {
+    if (!byMac.has(e.mac)) byMac.set(e.mac, []);
+    byMac.get(e.mac).push(e);
+  }
+
+  dd.innerHTML = [...byMac.entries()].map(([mac, entries]) => {
+    const edge = entries.find(e => e.is_edge) || entries[0];
+    const sw   = escHtml(edge.switch_name || edge.switch_ip);
+    const port = escHtml(edge.port_name || edge.port_num);
+    const vlan = edge.vlan_id ? ` · VLAN ${edge.vlan_id}` : '';
+    return `<div class="mdd-item" data-mac="${escHtml(mac)}" onmousedown="selectMac('${escHtml(mac)}')">
+      <div class="mdd-mac">${escHtml(mac)}</div>
+      <div class="mdd-sw">${sw} / ${port}${vlan}</div>
+    </div>`;
+  }).join('');
+  dd.style.display = 'block';
+}
+
+function macKey(e) {
+  const items = document.querySelectorAll('#mac-dd .mdd-item');
+  if (!items.length) return;
+  if (e.key === 'ArrowDown') {
+    _macDdIdx = Math.min(_macDdIdx + 1, items.length - 1);
+    items.forEach((el, i) => el.classList.toggle('mdd-hi', i === _macDdIdx));
+    items[_macDdIdx]?.scrollIntoView({ block: 'nearest' });
+    e.preventDefault();
+  } else if (e.key === 'ArrowUp') {
+    _macDdIdx = Math.max(_macDdIdx - 1, 0);
+    items.forEach((el, i) => el.classList.toggle('mdd-hi', i === _macDdIdx));
+    items[_macDdIdx]?.scrollIntoView({ block: 'nearest' });
+    e.preventDefault();
+  } else if (e.key === 'Enter') {
+    if (_macDdIdx >= 0) items[_macDdIdx].dispatchEvent(new MouseEvent('mousedown'));
+    e.preventDefault();
+  } else if (e.key === 'Escape') {
+    document.getElementById('mac-dd').style.display = 'none';
+    document.getElementById('mac-input').blur();
+  }
+}
+
+async function selectMac(mac) {
+  document.getElementById('mac-dd').style.display = 'none';
+  const inp = document.getElementById('mac-input');
+  inp.value = mac;
+  inp.classList.add('mac-active');
+  document.getElementById('mac-x').style.display = 'block';
+
+  // Clear VLAN filter if active
+  if (_vlanFilter) {
+    _vlanFilter = null;
+    document.getElementById('vlan-input').value = '';
+    document.getElementById('vlan-input').classList.remove('vlan-active');
+    document.getElementById('vlan-x').style.display = 'none';
+  }
+
+  const panel  = document.getElementById('mac-panel');
+  const status = document.getElementById('mac-status');
+  document.getElementById('mac-panel-title').textContent = mac;
+  document.getElementById('mac-info').innerHTML = '';
+  document.getElementById('mac-path').innerHTML = '';
+  status.textContent = 'Searching…';
+  panel.style.display = 'block';
+
+  try {
+    const r = await fetch(`/api/mac_route?mac=${encodeURIComponent(mac)}`);
+    if (!r.ok) {
+      status.textContent = r.status === 404 ? 'MAC not found in tables' : `Error ${r.status}`;
+      _restoreColors();
+      return;
+    }
+    const data = await r.json();
+    _renderMacRoute(data);
+    status.textContent = '';
+  } catch {
+    status.textContent = 'Request failed';
+  }
+}
+
+function _renderMacRoute(data) {
+  const info = document.getElementById('mac-info');
+  const pathEl = document.getElementById('mac-path');
+
+  if (!data.found) {
+    const lines = (data.entries || []).map(e =>
+      `<div class="mac-row"><span class="mac-lbl">${escHtml(e.switch_name||e.switch_ip)}</span>port ${escHtml(e.port_num)}</div>`
+    ).join('');
+    info.innerHTML = `<div style="color:#8b949e;font-size:11px;margin-bottom:4px">Seen on trunk ports only:</div>${lines}`;
+    pathEl.innerHTML = '';
+    _restoreColors();
+    return;
+  }
+
+  const vlan = data.vlan_id ? `VLAN ${data.vlan_id}` : '—';
+  info.innerHTML = `
+    <div class="mac-row"><span class="mac-lbl">Switch</span>${escHtml(data.edge_switch || '—')}</div>
+    <div class="mac-row"><span class="mac-lbl">Port</span>${escHtml(data.edge_port || '—')}</div>
+    <div class="mac-row"><span class="mac-lbl">VLAN</span>${escHtml(vlan)}</div>
+  `;
+
+  const nodes = data.path_nodes || [];
+  if (nodes.length > 0) {
+    const hops = nodes.map((n, i) =>
+      `<span class="mac-node${i === 0 ? ' is-edge' : ''}" onclick="focusPathNode('${escHtml(n)}')">${escHtml(n)}</span>`
+    ).join('<span class="mac-arrow">→</span>');
+    pathEl.innerHTML = `<div class="mac-path-title">Path to core:</div><div style="line-height:2">${hops}</div>`;
+  } else {
+    pathEl.innerHTML = '';
+  }
+
+  // Build highlight sets
+  const nodeSet = new Set(nodes);
+  const edgeSet = new Set();
+  for (const pe of (data.path_edges || [])) {
+    const idx = currentData.edges.findIndex(e =>
+      (e.from === pe.from && e.to === pe.to) || (e.from === pe.to && e.to === pe.from)
+    );
+    if (idx >= 0) edgeSet.add(idx);
+  }
+  _applyMacHighlight(nodeSet, edgeSet);
+}
+
+function _applyMacHighlight(nodeSet, edgeSet) {
+  if (!nodesDS || !edgesDS) return;
+  _macRouteHighlight = { nodes: nodeSet, edges: edgeSet };
+
+  const nodeUpd = [];
+  for (const id of nodesDS.getIds()) {
+    if (nodeSet.has(id)) {
+      nodeUpd.push({ id, color: _MAC_NODE_COLOR, font: { color: '#f0c040', size: 12 } });
+    } else {
+      nodeUpd.push({ id, color: _DIM_COLOR, font: _DIM_FONT });
+    }
+  }
+  nodesDS.update(nodeUpd);
+
+  const edgeUpd = [];
+  for (const id of edgesDS.getIds()) {
+    if (edgeSet.has(id)) {
+      edgeUpd.push({ id, color: _MAC_EDGE_COLOR, font: { color: '#f0c040' }, width: 3 });
+    } else {
+      edgeUpd.push({ id, color: _DIM_EDGE, font: { color: '#1c2128' } });
+    }
+  }
+  edgesDS.update(edgeUpd);
+}
+
+function _clearMacHighlightState() {
+  _macRouteHighlight = null;
+  document.getElementById('mac-input').value = '';
+  document.getElementById('mac-input').classList.remove('mac-active');
+  document.getElementById('mac-x').style.display = 'none';
+  document.getElementById('mac-panel').style.display = 'none';
+}
+
+function clearMacFilter() {
+  _clearMacHighlightState();
+  document.getElementById('mac-dd').style.display = 'none';
+  _restoreColors();
+}
+
+function focusPathNode(nodeId) {
+  if (!network) return;
+  network.focus(nodeId, { scale: 1.2, animation: { duration: 400 } });
+  network.selectNodes([nodeId]);
+}
+// ─────────────────────────────────────────────────────────────────────────────
+</script>
+</body>
+</html>

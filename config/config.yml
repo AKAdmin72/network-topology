@@ -1,0 +1,14 @@
+# SNMP community is set via .env -> SNMP_COMMUNITY
+# (this file is used as fallback if the env var is not set)
+
+# Poll interval in seconds
+poll_interval: 300
+
+# Max parallel SNMP sessions
+concurrency: 20
+
+# Timeout per SNMP request (seconds)
+snmp_timeout: 10
+
+# Retries on failure
+snmp_retries: 2

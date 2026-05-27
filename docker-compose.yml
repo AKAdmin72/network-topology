@@ -1,0 +1,28 @@
+services:
+  topology:
+    build: ./app
+    volumes:
+      - ./config:/config:ro
+      - topology_data:/data
+    environment:
+      - CONFIG_DIR=/config
+      - DATA_DIR=/data
+      - SNMP_COMMUNITY=${SNMP_COMMUNITY:-SECURECOMMUNITY}
+      - ARUBA_REST_USER=${ARUBA_REST_USER:-}
+      - ARUBA_REST_PASS=${ARUBA_REST_PASS:-}
+    restart: unless-stopped
+    network_mode: host   # required for SNMP access when switches are on the same L3 network
+
+  nginx:
+    image: nginx:alpine
+    network_mode: host   # shares host network to reach topology on 127.0.0.1:8080
+    volumes:
+      - ./config/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./config/htpasswd:/etc/nginx/htpasswd:ro
+      - ${CERT_DIR:-./cert}:/etc/nginx/certs:ro
+    depends_on:
+      - topology
+    restart: unless-stopped
+
+volumes:
+  topology_data:
