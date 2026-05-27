@@ -196,23 +196,20 @@ _PORT_ID_GOOD_SUBTYPES = {"5", "7"}  # interfaceName=5, local=7
 def _pick_port_name(port_num: str, subtypes: dict, ids: dict, descs: dict) -> str:
     """Choose the best human-readable port name from LLDP data.
 
-    Priority:
-      1. lldpPortId when subtype is interfaceName(5) or local(7) and not garbage
-      2. lldpPortDesc (actual name on Juniper interfaceAlias, HP ProCurve, etc.)
-      3. fallback 'port<num>'
+    Uses lldpPortId when it looks like a real interface name.
+    Never uses lldpPortDesc — it contains admin comments/descriptions.
+
+    subtype 1 (interfaceAlias): the ID itself is the admin comment, skip it.
+    subtype 3 (macAddress):     ID is a MAC, not useful — fall back to port number.
+    subtype 5 (interfaceName):  ID is the real name (ge-0/0/1, 1/1/1).
+    subtype 7 (local):          ID is vendor-specific but usually a real name.
+    unknown subtype:            try the ID, fall back to port number.
     """
     subtype = subtypes.get(port_num, "").strip()
-    port_id = ids.get(port_num, "")
-    if subtype in _PORT_ID_GOOD_SUBTYPES:
-        name = _usable_port_id(port_id)
-        if name:
-            return name
-    elif not subtype:
-        # subtype unknown — try id, fall back to desc
-        name = _usable_port_id(port_id)
-        if name:
-            return name
-    return descs.get(port_num) or f"port{port_num}"
+    if subtype == "1":               # interfaceAlias = admin comment, skip
+        return f"port{port_num}"
+    port_id = _usable_port_id(ids.get(port_num, ""))
+    return port_id or f"port{port_num}"
 
 
 def _usable_port_id(s: str) -> str:
