@@ -26,9 +26,11 @@ OID_DOT1Q_PVID          = "1.3.6.1.2.1.17.7.1.4.5.1.1"  # portNum → access vla
 
 # Standard LLDP-MIB OIDs (IEEE 802.1AB)
 OID_LOC_SYS_NAME        = "1.0.8802.1.1.2.1.3.3.0"
+OID_LOC_PORT_ID_SUBTYPE = "1.0.8802.1.1.2.1.3.7.1.2"
 OID_LOC_PORT_ID         = "1.0.8802.1.1.2.1.3.7.1.3"
 OID_LOC_PORT_DESC       = "1.0.8802.1.1.2.1.3.7.1.4"
 OID_REM_SYS_NAME        = "1.0.8802.1.1.2.1.4.1.1.9"
+OID_REM_PORT_ID_SUBTYPE = "1.0.8802.1.1.2.1.4.1.1.6"
 OID_REM_PORT_DESC       = "1.0.8802.1.1.2.1.4.1.1.8"
 OID_REM_PORT_ID         = "1.0.8802.1.1.2.1.4.1.1.7"
 OID_REM_MAN_ADDR        = "1.0.8802.1.1.2.1.4.2.1.3"
@@ -183,6 +185,34 @@ _TYPE_PRIORITY: dict[str, int] = {"wifi": 3, "router": 2, "switch": 1, "other": 
 _RE_MAC_SPACES = re.compile(r'^([0-9A-Fa-f]{2} ){5}[0-9A-Fa-f]{2}$')
 _RE_MAC_COLONS = re.compile(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$')
 _RE_MAC_CPORT  = re.compile(r'^[0-9A-Fa-f]{12}:[Pp]\d+$')
+
+
+# lldpPortIdSubtype values where lldpPortId contains the real interface name
+_PORT_ID_GOOD_SUBTYPES = {"5", "7"}  # interfaceName=5, local=7
+# subtype 1 = interfaceAlias (Juniper default) → portId is a comment, skip it
+# subtype 3 = macAddress (HP ProCurve)         → handled by _usable_port_id
+
+
+def _pick_port_name(port_num: str, subtypes: dict, ids: dict, descs: dict) -> str:
+    """Choose the best human-readable port name from LLDP data.
+
+    Priority:
+      1. lldpPortId when subtype is interfaceName(5) or local(7) and not garbage
+      2. lldpPortDesc (actual name on Juniper interfaceAlias, HP ProCurve, etc.)
+      3. fallback 'port<num>'
+    """
+    subtype = subtypes.get(port_num, "").strip()
+    port_id = ids.get(port_num, "")
+    if subtype in _PORT_ID_GOOD_SUBTYPES:
+        name = _usable_port_id(port_id)
+        if name:
+            return name
+    elif not subtype:
+        # subtype unknown — try id, fall back to desc
+        name = _usable_port_id(port_id)
+        if name:
+            return name
+    return descs.get(port_num) or f"port{port_num}"
 
 
 def _usable_port_id(s: str) -> str:
@@ -420,7 +450,8 @@ async def poll_switch(ip: str, community: str, timeout: int, retries: int,
     loc_name = loc_name.strip() or ip
 
     (
-        loc_port_ids, loc_ports, rem_names, rem_port_desc, rem_port_id,
+        loc_port_subtypes, loc_port_ids, loc_ports,
+        rem_names, rem_port_subtypes, rem_port_desc, rem_port_id,
         rem_man_addrs, rem_chassis_sub, rem_chassis_ids, rem_sys_cap_raw,
         if_status, if_speed_bps, if_speed_mbps,
         if_in_oct, if_out_oct, if_in_err, if_out_err,
@@ -428,9 +459,11 @@ async def poll_switch(ip: str, community: str, timeout: int, retries: int,
         stp_root_port_val, sys_descr_raw,
         vlan_names_raw, vlan_egress_raw, vlan_untagged_raw, port_pvid_raw,
     ) = await asyncio.gather(
+        snmp_walk(ip, community, OID_LOC_PORT_ID_SUBTYPE,  timeout, retries),
         snmp_walk(ip, community, OID_LOC_PORT_ID,          timeout, retries),
         snmp_walk(ip, community, OID_LOC_PORT_DESC,        timeout, retries),
         snmp_walk(ip, community, OID_REM_SYS_NAME,         timeout, retries),
+        snmp_walk(ip, community, OID_REM_PORT_ID_SUBTYPE,  timeout, retries),
         snmp_walk(ip, community, OID_REM_PORT_DESC,        timeout, retries),
         snmp_walk(ip, community, OID_REM_PORT_ID,          timeout, retries),
         snmp_walk(ip, community, OID_REM_MAN_ADDR,         timeout, retries),
@@ -536,12 +569,8 @@ async def poll_switch(ip: str, community: str, timeout: int, retries: int,
         if len(parts) < 3:
             continue
         local_port_num = parts[1]
-        local_port  = (_usable_port_id(loc_port_ids.get(local_port_num, ""))
-                       or loc_ports.get(local_port_num)
-                       or f"port{local_port_num}")
-        remote_port = (_usable_port_id(rem_port_id.get(idx, ""))
-                       or rem_port_desc.get(idx)
-                       or "").strip()
+        local_port  = _pick_port_name(local_port_num, loc_port_subtypes, loc_port_ids, loc_ports)
+        remote_port = _pick_port_name(idx, rem_port_subtypes, rem_port_id, rem_port_desc).strip()
         remote_ip   = rem_ips.get(".".join(parts[:3]), "")
 
         chassis_raw = rem_chassis_ids.get(idx, "").strip()
@@ -608,8 +637,8 @@ async def poll_switch(ip: str, community: str, timeout: int, retries: int,
         "descr":       sys_descr,
         "vlans":       vlans,
         "port_pvid":   port_pvid,
-        "port_names":  {pn: (_usable_port_id(loc_port_ids.get(pn, "")) or desc)
-                        for pn, desc in loc_ports.items()},
+        "port_names":  {pn: _pick_port_name(pn, loc_port_subtypes, loc_port_ids, loc_ports)
+                        for pn in loc_ports},
     }
 
 
