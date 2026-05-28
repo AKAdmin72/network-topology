@@ -93,6 +93,8 @@
     .lldp-table td.dim { color: #6e7681; }
     @keyframes ports-ts-flash { 0% { color:#58a6ff } 100% { color:#484f58 } }
     .ports-ts-flash { animation: ports-ts-flash 0.8s ease-out forwards; }
+    .col-resize-handle { position:absolute; right:0; top:0; bottom:0; width:5px; cursor:col-resize; z-index:1; }
+    .col-resize-handle:hover { background:rgba(88,166,255,0.25); }
     .vlan-row { padding: 6px 0; border-bottom: 1px solid #1c2128; }
     .vlan-row:last-child { border-bottom: none; }
     .vlan-header { display: flex; align-items: center; gap: 8px; margin-bottom: 3px; }
@@ -543,6 +545,11 @@
     <div id="np-mac-content"></div>
   </div>
   <div id="np-pane-ports" class="np-pane" style="display:none">
+    <div style="padding-bottom:6px">
+      <input id="np-ports-filter" type="text" placeholder="Filter ports…" oninput="_portsFilterChanged()"
+        style="width:100%;box-sizing:border-box;background:#0d1117;border:1px solid #30363d;
+               color:#c9d1d9;border-radius:4px;padding:4px 8px;font-size:12px;outline:none">
+    </div>
     <div id="np-ports-content"></div>
   </div>
 </div>
@@ -1084,7 +1091,8 @@ function _renderLldpTab(nodeId) {
       <td>${stp}</td>
     </tr>`;
   }).join('');
-  document.getElementById('np-lldp-content').innerHTML =
+  const lldpEl = document.getElementById('np-lldp-content');
+  lldpEl.innerHTML =
     `<table class="lldp-table">
       <colgroup>
         <col style="width:18%"><col style="width:36%"><col style="width:22%">
@@ -1095,6 +1103,7 @@ function _renderLldpTab(nodeId) {
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
+  _makeResizable(lldpEl.querySelector('.lldp-table'), _lldpColWidths, w => { _lldpColWidths = w; });
 }
 
 function _renderTrafficTab(nodeId) {
@@ -1190,10 +1199,55 @@ async function _renderMacTab(nodeId) {
   _renderMacTable();
 }
 
+let _portsColWidths = null;
+let _lldpColWidths  = null;
+
+function _makeResizable(tableEl, savedWidths, onSave) {
+  if (!tableEl) return;
+  const cols = Array.from(tableEl.querySelectorAll('col'));
+  const ths  = Array.from(tableEl.querySelectorAll('thead th'));
+  if (!cols.length || !ths.length) return;
+  const curWidths = ths.map(th => th.getBoundingClientRect().width);
+  const widths    = savedWidths || curWidths;
+  tableEl.style.tableLayout = 'fixed';
+  widths.forEach((w, i) => { if (cols[i]) cols[i].style.width = w + 'px'; });
+  ths.forEach((th, i) => {
+    if (i === ths.length - 1) return;
+    th.style.position = 'relative';
+    const handle = document.createElement('div');
+    handle.className = 'col-resize-handle';
+    handle.addEventListener('mousedown', e => {
+      e.preventDefault();
+      const startX  = e.clientX;
+      const startW  = parseFloat(cols[i].style.width)     || curWidths[i];
+      const startWN = parseFloat(cols[i + 1].style.width) || curWidths[i + 1];
+      const onMove  = ev => {
+        const dx = ev.clientX - startX;
+        cols[i].style.width     = Math.max(30, startW  + dx) + 'px';
+        cols[i + 1].style.width = Math.max(30, startWN - dx) + 'px';
+      };
+      const onUp = () => {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup',   onUp);
+        onSave(cols.map(c => parseFloat(c.style.width) || 0));
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup',   onUp);
+    });
+    th.appendChild(handle);
+  });
+}
+
 let _portsInterval = null;
 let _portsData     = [];
+let _portsFilter   = '';
 let _portsSortCol  = 'name';
 let _portsSortDir  = 1;
+
+function _portsFilterChanged() {
+  _portsFilter = document.getElementById('np-ports-filter')?.value || '';
+  if (_portsData.length) _renderPortsTable(_portsData);
+}
 
 function _portsSortVal(p, col) {
   if (col === 'name')   return p.name;
@@ -1234,17 +1288,23 @@ function _renderPortsTable(ports) {
     const arrow = _portsSortCol === col ? (_portsSortDir === 1 ? ' ↑' : ' ↓') : '';
     return `<th style="cursor:pointer;user-select:none" onclick="sortPortsTab('${col}')">${label}${arrow}</th>`;
   };
+  const q        = _portsFilter.trim().toLowerCase();
+  const visible  = q ? sorted.filter(p =>
+    p.name.toLowerCase().includes(q) || p.alias.toLowerCase().includes(q)) : sorted;
   const up    = ports.filter(p => p.admin !== '2' && p.oper === '1').length;
   const total = ports.filter(p => p.admin !== '2').length;
   const now   = new Date().toLocaleTimeString();
-  const rows  = sorted.map(p => `<tr>
+  const countLine = q
+    ? `${visible.length} из ${ports.length} · ${up} активны`
+    : `${up} / ${total} портов активны`;
+  const rows  = visible.map(p => `<tr>
     <td style="font-family:monospace;font-size:11px">${escHtml(p.name)}</td>
     <td>${dot(p.admin, p.oper)} ${statusText(p.admin, p.oper)}</td>
     <td class="dim" style="font-size:11px">${escHtml(p.alias)}</td>
   </tr>`).join('');
   el.innerHTML = `
     <div style="font-size:11px;color:#484f58;margin-bottom:6px">
-      ${up} / ${total} портов активны · <span id="np-ports-ts">↻ ${now}</span>
+      ${countLine} · <span id="np-ports-ts">↻ ${now}</span>
     </div>
     <table class="lldp-table">
       <colgroup><col style="width:22%"><col style="width:20%"><col></colgroup>
@@ -1253,11 +1313,15 @@ function _renderPortsTable(ports) {
     </table>`;
   const tsEl = document.getElementById('np-ports-ts');
   if (tsEl) { tsEl.classList.add('ports-ts-flash'); setTimeout(() => tsEl.classList.remove('ports-ts-flash'), 800); }
+  _makeResizable(el.querySelector('.lldp-table'), _portsColWidths, w => { _portsColWidths = w; });
 }
 
 function _startPortsPolling(nodeId) {
   _stopPortsPolling();
-  _portsData = [];
+  _portsData   = [];
+  _portsFilter = '';
+  const filterEl = document.getElementById('np-ports-filter');
+  if (filterEl) filterEl.value = '';
   const node = currentData.nodes.find(n => n.id === nodeId);
   const el   = document.getElementById('np-ports-content');
   if (!node?.ip) {
