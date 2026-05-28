@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 import db
-from poller import build_topology, build_mac_tables, load_config, load_switches, refresh_link_counters
+from poller import build_topology, build_mac_tables, load_config, load_switches, refresh_link_counters, poll_switch_ports
 from fastapi import Query
 
 logging.basicConfig(
@@ -483,6 +483,15 @@ async def mac_search_api(q: str = Query(""), limit: int = Query(20, ge=1, le=100
     for r in results:
         r["switch_name"] = name_by_ip.get(r["switch_ip"], r["switch_ip"])
     return JSONResponse(results)
+
+
+@app.get("/api/switch_ports")
+async def switch_ports_api(switch_ip: str = Query(...)):
+    cfg       = load_config()
+    community = os.getenv("SNMP_COMMUNITY") or cfg.get("community", "SECURECOMMUNITY")
+    timeout   = int(cfg.get("snmp_timeout", 10))
+    ports     = await poll_switch_ports(switch_ip, community, timeout, retries=1)
+    return JSONResponse(ports)
 
 
 @app.get("/api/mac_route")

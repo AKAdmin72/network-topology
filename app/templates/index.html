@@ -91,6 +91,8 @@
                      max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .lldp-table tr:hover td { background: #1c2128; }
     .lldp-table td.dim { color: #6e7681; }
+    @keyframes ports-ts-flash { 0% { color:#58a6ff } 100% { color:#484f58 } }
+    .ports-ts-flash { animation: ports-ts-flash 0.8s ease-out forwards; }
     .vlan-row { padding: 6px 0; border-bottom: 1px solid #1c2128; }
     .vlan-row:last-child { border-bottom: none; }
     .vlan-header { display: flex; align-items: center; gap: 8px; margin-bottom: 3px; }
@@ -495,6 +497,7 @@
     <button class="np-tab"        onclick="npTab('traffic')">Traffic</button>
     <button class="np-tab"        onclick="npTab('vlan')">VLAN</button>
     <button class="np-tab"        onclick="npTab('mac')">MAC</button>
+    <button class="np-tab"        onclick="npTab('ports')">Ports</button>
   </div>
 
   <div id="np-pane-info" class="np-pane">
@@ -538,6 +541,9 @@
 
   <div id="np-pane-mac" class="np-pane" style="display:none">
     <div id="np-mac-content"></div>
+  </div>
+  <div id="np-pane-ports" class="np-pane" style="display:none">
+    <div id="np-ports-content"></div>
   </div>
 </div>
 
@@ -1010,12 +1016,14 @@ function updateStatusBar() {
 let _npActiveTab = 'info';
 
 function npTab(name) {
+  if (_npActiveTab === 'ports' && name !== 'ports') _stopPortsPolling();
   _npActiveTab = name;
-  ['info', 'lldp', 'traffic', 'vlan', 'mac'].forEach((t, i) => {
+  ['info', 'lldp', 'traffic', 'vlan', 'mac', 'ports'].forEach((t, i) => {
     document.getElementById('np-pane-' + t).style.display = t === name ? '' : 'none';
     document.querySelectorAll('.np-tab')[i].classList.toggle('active', t === name);
   });
-  if (name === 'mac' && _currentNodeId) _renderMacTab(_currentNodeId);
+  if (name === 'mac'   && _currentNodeId) _renderMacTab(_currentNodeId);
+  if (name === 'ports' && _currentNodeId) _startPortsPolling(_currentNodeId);
 }
 
 function _renderVlanTab(nodeId) {
@@ -1182,6 +1190,75 @@ async function _renderMacTab(nodeId) {
   _renderMacTable();
 }
 
+let _portsInterval = null;
+
+function _renderPortsTable(ports) {
+  const el = document.getElementById('np-ports-content');
+  if (!ports.length) {
+    el.innerHTML = '<div style="color:#484f58;font-size:12px;padding:8px 0">Нет интерфейсов</div>';
+    return;
+  }
+  const dot = (admin, oper) => {
+    if (admin === '2') return '<span style="color:#6e7681">●</span>';
+    if (oper  === '1') return '<span style="color:#3fb950">●</span>';
+    return '<span style="color:#f85149">●</span>';
+  };
+  const statusText = (admin, oper) => {
+    if (admin === '2') return '<span class="dim">disabled</span>';
+    if (oper  === '1') return '<span style="color:#3fb950">up</span>';
+    return '<span style="color:#f85149">down</span>';
+  };
+  const up    = ports.filter(p => p.admin !== '2' && p.oper === '1').length;
+  const total = ports.filter(p => p.admin !== '2').length;
+  const now   = new Date().toLocaleTimeString();
+  const rows  = ports.map(p => `<tr>
+    <td style="font-family:monospace;font-size:11px">${escHtml(p.name)}</td>
+    <td>${dot(p.admin, p.oper)} ${statusText(p.admin, p.oper)}</td>
+    <td class="dim">${escHtml(p.speed)}</td>
+    <td class="dim" style="font-size:11px;max-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(p.alias)}</td>
+  </tr>`).join('');
+  el.innerHTML = `
+    <div style="font-size:11px;color:#484f58;margin-bottom:6px">
+      ${up} / ${total} портов активны · <span id="np-ports-ts">↻ ${now}</span>
+    </div>
+    <table class="lldp-table">
+      <colgroup><col style="width:22%"><col style="width:20%"><col style="width:12%"><col></colgroup>
+      <thead><tr><th>Port</th><th>Status</th><th>Speed</th><th>Description</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  const tsEl = document.getElementById('np-ports-ts');
+  if (tsEl) { tsEl.classList.add('ports-ts-flash'); setTimeout(() => tsEl.classList.remove('ports-ts-flash'), 800); }
+}
+
+function _startPortsPolling(nodeId) {
+  _stopPortsPolling();
+  const node = currentData.nodes.find(n => n.id === nodeId);
+  const el   = document.getElementById('np-ports-content');
+  if (!node?.ip) {
+    el.innerHTML = '<div style="color:#484f58;font-size:12px;padding:8px 0">Нет IP-адреса</div>';
+    return;
+  }
+  const ip = node.ip;
+  const poll = async () => {
+    try {
+      const r = await fetch(`/api/switch_ports?switch_ip=${encodeURIComponent(ip)}`);
+      if (!r.ok) throw new Error(r.status);
+      if (_npActiveTab === 'ports') _renderPortsTable(await r.json());
+    } catch {
+      if (_npActiveTab === 'ports')
+        document.getElementById('np-ports-content').innerHTML =
+          '<div style="color:#f85149;font-size:12px;padding:8px 0">Ошибка опроса</div>';
+    }
+  };
+  el.innerHTML = '<div style="color:#484f58;font-size:12px;padding:8px 0">Загрузка…</div>';
+  poll();
+  _portsInterval = setInterval(poll, 4000);
+}
+
+function _stopPortsPolling() {
+  if (_portsInterval !== null) { clearInterval(_portsInterval); _portsInterval = null; }
+}
+
 function onNodeClick(params) {
   if (!params.nodes.length) {
     closePanel();
@@ -1253,6 +1330,7 @@ function onNodeClick(params) {
 }
 
 function closePanel() {
+  _stopPortsPolling();
   document.getElementById('node-panel').style.display = 'none';
   if (network) network.unselectAll();
 }

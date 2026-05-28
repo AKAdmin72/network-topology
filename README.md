@@ -16,6 +16,7 @@ Juniper, and any switch that implements LLDP-MIB.
 - Node classification: switch / router / wifi / other (auto from LLDP caps, manual override)
 - View filter by node type
 - MAC address search and path tracing
+- **Live port status panel** — real-time per-port status (up/down/disabled), speed and description, polled every 4 s directly from the selected switch without storing anything in the database
 - Basic auth + HTTPS via nginx
 
 ## Requirements

@@ -34,10 +34,12 @@ OID_REM_CHASSIS_ID      = "1.0.8802.1.1.2.1.4.1.1.5"
 OID_REM_SYS_CAP        = "1.0.8802.1.1.2.1.4.1.1.12"  # lldpRemSysCapEnabled BITS
 
 # IF-MIB OIDs
-OID_IF_DESCR       = "1.3.6.1.2.1.2.2.1.2"
-OID_IF_OPER_STATUS = "1.3.6.1.2.1.2.2.1.8"
-OID_IF_SPEED       = "1.3.6.1.2.1.2.2.1.5"   # bps, 32-bit
-OID_IF_HIGH_SPEED  = "1.3.6.1.31.1.1.1.15"   # Mbps, 64-bit (ifXTable, optional)
+OID_IF_DESCR        = "1.3.6.1.2.1.2.2.1.2"
+OID_IF_ADMIN_STATUS = "1.3.6.1.2.1.2.2.1.7"
+OID_IF_OPER_STATUS  = "1.3.6.1.2.1.2.2.1.8"
+OID_IF_SPEED        = "1.3.6.1.2.1.2.2.1.5"   # bps, 32-bit
+OID_IF_HIGH_SPEED   = "1.3.6.1.31.1.1.1.15"   # Mbps, 64-bit (ifXTable, optional)
+OID_IF_ALIAS        = "1.3.6.1.2.1.31.1.1.1.18"  # ifAlias — admin description
 OID_IF_IN_OCTETS   = "1.3.6.1.2.1.2.2.1.10"
 OID_IF_OUT_OCTETS  = "1.3.6.1.2.1.2.2.1.16"
 OID_IF_IN_ERRORS   = "1.3.6.1.2.1.2.2.1.14"
@@ -804,6 +806,40 @@ async def build_topology() -> dict:
             "unreachable_count": len(switch_results) - reachable_count,
         },
     }
+
+
+async def poll_switch_ports(ip: str, community: str, timeout: int, retries: int) -> list[dict]:
+    """Return [{idx, name, admin, oper, speed, alias}] for all interfaces of one switch."""
+    def _speed_str(raw: str) -> str:
+        try:
+            mbps = int(raw)
+            if mbps >= 1000:
+                return f"{mbps // 1000}G"
+            if mbps > 0:
+                return f"{mbps}M"
+        except (ValueError, TypeError):
+            pass
+        return ""
+
+    if_descr_r, if_oper_r, if_admin_r, if_speed_r, if_alias_r = await asyncio.gather(
+        snmp_walk(ip, community, OID_IF_DESCR,        timeout, retries),
+        snmp_walk(ip, community, OID_IF_OPER_STATUS,  timeout, retries),
+        snmp_walk(ip, community, OID_IF_ADMIN_STATUS, timeout, retries),
+        snmp_walk(ip, community, OID_IF_HIGH_SPEED,   timeout, retries),
+        snmp_walk(ip, community, OID_IF_ALIAS,        timeout, retries),
+    )
+
+    ports = []
+    for idx in sorted(if_descr_r, key=lambda x: int(x) if x.isdigit() else 0):
+        ports.append({
+            "idx":   idx,
+            "name":  if_descr_r[idx],
+            "oper":  if_oper_r.get(idx, "").strip(),
+            "admin": if_admin_r.get(idx, "").strip(),
+            "speed": _speed_str(if_speed_r.get(idx, "")),
+            "alias": if_alias_r.get(idx, ""),
+        })
+    return ports
 
 
 def _mac_from_suffix(parts: list[str]) -> str | None:
