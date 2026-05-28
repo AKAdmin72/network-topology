@@ -1191,6 +1191,22 @@ async function _renderMacTab(nodeId) {
 }
 
 let _portsInterval = null;
+let _portsData     = [];
+let _portsSortCol  = 'name';
+let _portsSortDir  = 1;
+
+function _portsSortVal(p, col) {
+  if (col === 'name')   return p.name;
+  if (col === 'status') return p.admin === '2' ? 2 : p.oper === '1' ? 0 : 1;
+  if (col === 'alias')  return p.alias;
+  return '';
+}
+
+function sortPortsTab(col) {
+  if (_portsSortCol === col) _portsSortDir = -_portsSortDir;
+  else { _portsSortCol = col; _portsSortDir = 1; }
+  _renderPortsTable(_portsData);
+}
 
 function _renderPortsTable(ports) {
   const el = document.getElementById('np-ports-content');
@@ -1198,6 +1214,12 @@ function _renderPortsTable(ports) {
     el.innerHTML = '<div style="color:#484f58;font-size:12px;padding:8px 0">Нет интерфейсов</div>';
     return;
   }
+  const sorted = [...ports].sort((a, b) => {
+    const va = _portsSortVal(a, _portsSortCol);
+    const vb = _portsSortVal(b, _portsSortCol);
+    if (typeof va === 'number') return (va - vb) * _portsSortDir;
+    return String(va).localeCompare(String(vb), undefined, { numeric: true, sensitivity: 'base' }) * _portsSortDir;
+  });
   const dot = (admin, oper) => {
     if (admin === '2') return '<span style="color:#6e7681">●</span>';
     if (oper  === '1') return '<span style="color:#3fb950">●</span>';
@@ -1208,22 +1230,25 @@ function _renderPortsTable(ports) {
     if (oper  === '1') return '<span style="color:#3fb950">up</span>';
     return '<span style="color:#f85149">down</span>';
   };
+  const th = (col, label) => {
+    const arrow = _portsSortCol === col ? (_portsSortDir === 1 ? ' ↑' : ' ↓') : '';
+    return `<th style="cursor:pointer;user-select:none" onclick="sortPortsTab('${col}')">${label}${arrow}</th>`;
+  };
   const up    = ports.filter(p => p.admin !== '2' && p.oper === '1').length;
   const total = ports.filter(p => p.admin !== '2').length;
   const now   = new Date().toLocaleTimeString();
-  const rows  = ports.map(p => `<tr>
+  const rows  = sorted.map(p => `<tr>
     <td style="font-family:monospace;font-size:11px">${escHtml(p.name)}</td>
     <td>${dot(p.admin, p.oper)} ${statusText(p.admin, p.oper)}</td>
-    <td class="dim">${escHtml(p.speed)}</td>
-    <td class="dim" style="font-size:11px;max-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(p.alias)}</td>
+    <td class="dim" style="font-size:11px">${escHtml(p.alias)}</td>
   </tr>`).join('');
   el.innerHTML = `
     <div style="font-size:11px;color:#484f58;margin-bottom:6px">
       ${up} / ${total} портов активны · <span id="np-ports-ts">↻ ${now}</span>
     </div>
     <table class="lldp-table">
-      <colgroup><col style="width:22%"><col style="width:20%"><col style="width:12%"><col></colgroup>
-      <thead><tr><th>Port</th><th>Status</th><th>Speed</th><th>Description</th></tr></thead>
+      <colgroup><col style="width:22%"><col style="width:20%"><col></colgroup>
+      <thead><tr>${th('name','Port')}${th('status','Status')}${th('alias','Description')}</tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
   const tsEl = document.getElementById('np-ports-ts');
@@ -1232,6 +1257,7 @@ function _renderPortsTable(ports) {
 
 function _startPortsPolling(nodeId) {
   _stopPortsPolling();
+  _portsData = [];
   const node = currentData.nodes.find(n => n.id === nodeId);
   const el   = document.getElementById('np-ports-content');
   if (!node?.ip) {
@@ -1243,7 +1269,8 @@ function _startPortsPolling(nodeId) {
     try {
       const r = await fetch(`/api/switch_ports?switch_ip=${encodeURIComponent(ip)}`);
       if (!r.ok) throw new Error(r.status);
-      if (_npActiveTab === 'ports') _renderPortsTable(await r.json());
+      _portsData = await r.json();
+      if (_npActiveTab === 'ports') _renderPortsTable(_portsData);
     } catch {
       if (_npActiveTab === 'ports')
         document.getElementById('np-ports-content').innerHTML =
