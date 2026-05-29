@@ -462,10 +462,10 @@
       </div>
     </div>
     <div id="stats-body">
-      <div class="stats-section">Top 10 портов по трафику</div>
-      <div class="stats-legend"><span style="color:#3fb950">── ↑ out</span>&nbsp;&nbsp;<span style="color:#388bfd">── ↓ in</span>&nbsp;&nbsp;(avg за период)</div>
+      <div class="stats-section">Top 10 ports by traffic</div>
+      <div class="stats-legend"><span style="color:#3fb950">── ↑ out</span>&nbsp;&nbsp;<span style="color:#388bfd">── ↓ in</span>&nbsp;&nbsp;(avg for period)</div>
       <canvas id="stats-ports-canvas" class="stats-canvas"></canvas>
-      <div class="stats-section">Трафик по свитчам</div>
+      <div class="stats-section">Traffic by switch</div>
       <div class="stats-legend"><span style="color:#8957e5">── in + out avg</span></div>
       <canvas id="stats-switch-canvas" class="stats-canvas"></canvas>
     </div>
@@ -1039,7 +1039,7 @@ function _renderVlanTab(nodeId) {
   const el    = document.getElementById('np-vlan-content');
 
   if (!vlans.length) {
-    el.innerHTML = '<div style="color:#484f58;font-size:12px;padding:8px 0">Нет данных VLAN</div>';
+    el.innerHTML = '<div style="color:#484f58;font-size:12px;padding:8px 0">No VLAN data</div>';
     return;
   }
 
@@ -1070,7 +1070,7 @@ function _renderLldpTab(nodeId) {
   const links = currentData.edges.filter(e => e.from === nodeId || e.to === nodeId);
   if (!links.length) {
     document.getElementById('np-lldp-content').innerHTML =
-      '<div style="color:#484f58;font-size:12px;padding:8px 0">Нет LLDP-соседей</div>';
+      '<div style="color:#484f58;font-size:12px;padding:8px 0">No LLDP neighbors</div>';
     return;
   }
   const rows = links.map(e => {
@@ -1111,7 +1111,7 @@ function _renderTrafficTab(nodeId) {
   const withData = links.filter(e => e.in_bps != null || e.out_bps != null);
   if (!withData.length) {
     document.getElementById('np-traffic-content').innerHTML =
-      '<div style="color:#484f58;font-size:12px;padding:8px 0">Нет данных трафика</div>';
+      '<div style="color:#484f58;font-size:12px;padding:8px 0">No traffic data</div>';
     return;
   }
   withData.sort((a, b) =>
@@ -1162,7 +1162,7 @@ function _renderMacTable() {
     <td class="dim">${m.vlan_id ?? '—'}</td>
   </tr>`).join('');
   el.innerHTML = `
-    <div style="font-size:11px;color:#484f58;margin-bottom:6px">${_macTabData.length} edge MAC-адресов</div>
+    <div style="font-size:11px;color:#484f58;margin-bottom:6px">${_macTabData.length} edge MACs</div>
     <table class="lldp-table">
       <colgroup><col style="width:52%"><col style="width:30%"><col style="width:18%"></colgroup>
       <thead><tr>${th('mac','MAC')}${th('port_name','Port')}${th('vlan_id','VLAN')}</tr></thead>
@@ -1181,19 +1181,19 @@ async function _renderMacTab(nodeId) {
   const node = currentData.nodes.find(n => n.id === nodeId);
   _macTabData = [];
   if (!node?.ip) {
-    el.innerHTML = '<div style="color:#484f58;font-size:12px;padding:8px 0">Нет данных (нет IP)</div>';
+    el.innerHTML = '<div style="color:#484f58;font-size:12px;padding:8px 0">No data (no IP)</div>';
     return;
   }
-  el.innerHTML = '<div style="color:#484f58;font-size:12px;padding:8px 0">Загрузка…</div>';
+  el.innerHTML = '<div style="color:#484f58;font-size:12px;padding:8px 0">Loading…</div>';
   try {
     const r = await fetch(`/api/switch_macs?switch_ip=${encodeURIComponent(node.ip)}`);
     _macTabData = await r.json();
   } catch {
-    el.innerHTML = '<div style="color:#f85149;font-size:12px;padding:8px 0">Ошибка загрузки</div>';
+    el.innerHTML = '<div style="color:#f85149;font-size:12px;padding:8px 0">Load error</div>';
     return;
   }
   if (!_macTabData.length) {
-    el.innerHTML = '<div style="color:#484f58;font-size:12px;padding:8px 0">Нет edge MAC-адресов</div>';
+    el.innerHTML = '<div style="color:#484f58;font-size:12px;padding:8px 0">No edge MACs</div>';
     return;
   }
   _renderMacTable();
@@ -1265,7 +1265,7 @@ function sortPortsTab(col) {
 function _renderPortsTable(ports) {
   const el = document.getElementById('np-ports-content');
   if (!ports.length) {
-    el.innerHTML = '<div style="color:#484f58;font-size:12px;padding:8px 0">Нет интерфейсов</div>';
+    el.innerHTML = '<div style="color:#484f58;font-size:12px;padding:8px 0">No interfaces</div>';
     return;
   }
   const sorted = [...ports].sort((a, b) => {
@@ -1295,8 +1295,8 @@ function _renderPortsTable(ports) {
   const total = ports.filter(p => p.admin !== '2').length;
   const now   = new Date().toLocaleTimeString();
   const countLine = q
-    ? `${visible.length} из ${ports.length} · ${up} активны`
-    : `${up} / ${total} портов активны`;
+    ? `${visible.length} of ${ports.length} · ${up} active`
+    : `${up} / ${total} ports active`;
   const rows  = visible.map(p => `<tr>
     <td style="font-family:monospace;font-size:11px">${escHtml(p.name)}</td>
     <td>${dot(p.admin, p.oper)} ${statusText(p.admin, p.oper)}</td>
@@ -1325,7 +1325,7 @@ function _startPortsPolling(nodeId) {
   const node = currentData.nodes.find(n => n.id === nodeId);
   const el   = document.getElementById('np-ports-content');
   if (!node?.ip) {
-    el.innerHTML = '<div style="color:#484f58;font-size:12px;padding:8px 0">Нет IP-адреса</div>';
+    el.innerHTML = '<div style="color:#484f58;font-size:12px;padding:8px 0">No IP address</div>';
     return;
   }
   const ip = node.ip;
@@ -1338,10 +1338,10 @@ function _startPortsPolling(nodeId) {
     } catch {
       if (_npActiveTab === 'ports')
         document.getElementById('np-ports-content').innerHTML =
-          '<div style="color:#f85149;font-size:12px;padding:8px 0">Ошибка опроса</div>';
+          '<div style="color:#f85149;font-size:12px;padding:8px 0">Poll error</div>';
     }
   };
-  el.innerHTML = '<div style="color:#484f58;font-size:12px;padding:8px 0">Загрузка…</div>';
+  el.innerHTML = '<div style="color:#484f58;font-size:12px;padding:8px 0">Loading…</div>';
   poll();
   _portsInterval = setInterval(poll, 4000);
 }
@@ -1952,7 +1952,7 @@ function _applyViewFilter() {
     badgeUpdates.push({
       id: swId,
       label: _makeBaseLabel(raw, swId) + '\n↳ ' + hiddenNbs.length + ' dev',
-      title: (nodesDS.get(swId).title || '') + '<hr style="border-color:#30363d;margin:4px 0">↳ ' + hiddenNbs.length + ' устройств<br>' + devTip,
+      title: (nodesDS.get(swId).title || '') + '<hr style="border-color:#30363d;margin:4px 0">↳ ' + hiddenNbs.length + ' devices<br>' + devTip,
     });
   });
   if (badgeUpdates.length) nodesDS.update(badgeUpdates);
@@ -2226,7 +2226,7 @@ function drawHBarChart(canvas, rows, opts = {}) {
     ctx.font = '12px sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('Нет данных за выбранный период', W / 2, H / 2);
+    ctx.fillText('No data for selected period', W / 2, H / 2);
     return;
   }
 

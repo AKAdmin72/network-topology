@@ -46,12 +46,15 @@ docker compose logs -f topology
 
 | Constant | OID | Description |
 |---|---|---|
-| `OID_IF_DESCR` | `1.3.6.1.2.1.2.2.1.2` | Interface name (indexed by ifIndex) |
+| `OID_IF_DESCR` | `1.3.6.1.2.1.2.2.1.2` | Interface name, indexed by ifIndex — used as port name |
 | `OID_IF_ADMIN_STATUS` | `1.3.6.1.2.1.2.2.1.7` | 1=up 2=down (admin configured) |
-| `OID_IF_OPER_STATUS` | `1.3.6.1.2.1.2.2.1.8` | 1=up 2=down (actual state) |
-| `OID_IF_HIGH_SPEED` | `1.3.6.1.2.1.31.1.1.1.15` | Speed in Mbps (64-bit) |
+| `OID_IF_OPER_STATUS` | `1.3.6.1.2.1.2.2.1.8` | 1=up 2=down (actual link state) |
+| `OID_IF_SPEED` | `1.3.6.1.2.1.2.2.1.5` | Speed in bps, 32-bit (may saturate at 1G) |
+| `OID_IF_HIGH_SPEED` | `1.3.6.1.31.1.1.1.15` | Speed in Mbps, 64-bit (ifXTable, preferred) |
 | `OID_IF_ALIAS` | `1.3.6.1.2.1.31.1.1.1.18` | Admin description (ifAlias) |
-| `OID_LOC_PORT_DESC` | `1.0.8802.1.1.2.1.3.7.1.4` | lldpLocPortDesc — local port name (= ifDescr on most vendors) |
+| `OID_IF_IN_OCTETS` | `1.3.6.1.2.1.2.2.1.10` | Inbound octets counter |
+| `OID_IF_OUT_OCTETS` | `1.3.6.1.2.1.2.2.1.16` | Outbound octets counter |
+| `OID_LOC_SYS_NAME` | `1.0.8802.1.1.2.1.3.3.0` | Local system hostname (LLDP) |
 | `OID_REM_SYS_NAME` | `1.0.8802.1.1.2.1.4.1.1.9` | Neighbor hostname |
 | `OID_REM_PORT_DESC` | `1.0.8802.1.1.2.1.4.1.1.8` | Neighbor port description |
 | `OID_REM_SYS_CAP` | `1.0.8802.1.1.2.1.4.1.1.12` | Capability bits (bridge/router/wlan) |
@@ -99,6 +102,8 @@ lifespan():
 - **`_applyViewFilter()`** must be called after every `loadTopology()` — otherwise hidden nodes (wifi, other) reappear on refresh.
 - **`_currentNodeId`** — currently selected node. `null` when panel is closed.
 - **`_portsInterval`** — setInterval handle for live port polling. Always `_stopPortsPolling()` before `closePanel()` and on tab switch away from Ports.
+- **Resizable columns**: `_makeResizable(tableEl, savedWidths, onSave)` — must be called after every `innerHTML` replacement that contains a `.lldp-table`. Widths stored in `_portsColWidths` / `_lldpColWidths`.
+- **Port filter input** (`#np-ports-filter`) lives in a separate div *above* `#np-ports-content` so it survives polling re-renders. Filter resets when switching to a different node.
 
 ## Security rules
 
