@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <title>Network Topology</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23161b22'/%3E%3Cline x1='16' y1='16' x2='16' y2='5' stroke='%23484f58' stroke-width='1.5'/%3E%3Cline x1='16' y1='16' x2='27' y2='16' stroke='%23484f58' stroke-width='1.5'/%3E%3Cline x1='16' y1='16' x2='16' y2='27' stroke='%23484f58' stroke-width='1.5'/%3E%3Cline x1='16' y1='16' x2='5' y2='16' stroke='%23484f58' stroke-width='1.5'/%3E%3Ccircle cx='16' cy='5' r='2.5' fill='%2358a6ff'/%3E%3Ccircle cx='27' cy='16' r='2.5' fill='%2358a6ff'/%3E%3Ccircle cx='16' cy='27' r='2.5' fill='%2358a6ff'/%3E%3Ccircle cx='5' cy='16' r='2.5' fill='%2358a6ff'/%3E%3Ccircle cx='16' cy='16' r='4' fill='%2358a6ff'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/static/vis-network.min.css">
   <script src="/static/vis-network.min.js"></script>
   <style>
@@ -196,6 +197,12 @@
     #close-edge-panel:hover { color: #c9d1d9; }
     .ep-section { color: #8b949e; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; margin: 10px 0 5px; border-top: 1px solid #21262d; padding-top: 8px; }
     .ep-section:first-of-type { margin-top: 6px; }
+    #ep-tabs { display:flex; gap:1px; background:#30363d; border-radius:6px; overflow:hidden; margin-bottom:10px; }
+    .ep-tab { border-radius:0; border:none; padding:5px 0; font-size:12px;
+      flex:1; background:#161b22; color:#8b949e; cursor:pointer; }
+    .ep-tab:first-child { border-radius:5px 0 0 5px; }
+    .ep-tab:last-child  { border-radius:0 5px 5px 0; }
+    .ep-tab.active { background:#1f3a5f !important; color:#58a6ff !important; }
 
     /* Stats modal */
     #stats-modal {
@@ -412,33 +419,42 @@
 <div id="edge-panel">
   <button id="close-edge-panel" onclick="closeEdgePanel()">✕</button>
   <h3 id="ep-ports" style="color:#58a6ff;font-size:13px;margin-bottom:10px;word-break:break-all">— ↔ —</h3>
-  <div class="info-row"><span class="info-label">From</span><span id="ep-from">—</span></div>
-  <div class="info-row"><span class="info-label">To</span><span id="ep-to">—</span></div>
-  <div class="info-row"><span class="info-label">Speed</span><span id="ep-speed">—</span></div>
-  <div class="info-row"><span class="info-label">Status</span><span id="ep-status">—</span></div>
-  <div class="ep-section">Traffic</div>
-  <div class="info-row"><span class="info-label">↑ Out</span><span id="ep-out">—</span></div>
-  <div class="info-row"><span class="info-label">↓ In</span><span id="ep-in">—</span></div>
-  <div class="ep-section">Errors</div>
-  <div class="info-row"><span class="info-label">↑ Out</span><span id="ep-err-out">—</span></div>
-  <div class="info-row"><span class="info-label">↓ In</span><span id="ep-err-in">—</span></div>
-  <div class="info-row" id="ep-stp-row" style="display:none"><span class="info-label">STP</span><span id="ep-stp">—</span></div>
-  <div id="ep-cached-row" style="display:none;font-size:11px;color:#484f58;margin-top:10px;border-top:1px solid #21262d;padding-top:8px"></div>
-  <div id="ep-chart-wrap">
-    <div class="ep-section" style="display:flex;align-items:center;justify-content:space-between">
-      <span>Traffic history (24h)</span>
-      <button id="ep-expand-btn" onclick="expandChart()" title="Expand chart"
-        style="background:none;border:none;color:#8b949e;cursor:pointer;font-size:15px;padding:0;line-height:1">⤢</button>
-    </div>
-    <canvas id="ep-chart" style="width:100%;height:70px;display:block;border-radius:3px"></canvas>
-    <div style="font-size:10px;color:#484f58;text-align:right;margin-top:3px">
-      <span style="color:#3fb950">─ ↑out</span>&nbsp;&nbsp;<span style="color:#388bfd">─ ↓in</span>
-    </div>
+  <div id="ep-tabs">
+    <button class="ep-tab active" onclick="epTab('info')">Info</button>
+    <button class="ep-tab"        onclick="epTab('vlans')">VLANs</button>
   </div>
-  <div class="ep-section">Poll</div>
-  <div class="info-row"><span class="info-label">Updated</span><span id="ep-updated" style="font-variant-numeric:tabular-nums">—</span></div>
-  <div class="info-row"><span class="info-label">Next in</span><span id="ep-next"    style="font-variant-numeric:tabular-nums">—</span></div>
-  <button id="ep-refresh-btn" onclick="refreshLinkCounters()" style="width:100%;margin-top:10px">↻ Refresh counters</button>
+  <div id="ep-pane-info">
+    <div class="info-row"><span class="info-label">From</span><span id="ep-from">—</span></div>
+    <div class="info-row"><span class="info-label">To</span><span id="ep-to">—</span></div>
+    <div class="info-row"><span class="info-label">Speed</span><span id="ep-speed">—</span></div>
+    <div class="info-row"><span class="info-label">Status</span><span id="ep-status">—</span></div>
+    <div class="ep-section">Traffic</div>
+    <div class="info-row"><span class="info-label">↑ Out</span><span id="ep-out">—</span></div>
+    <div class="info-row"><span class="info-label">↓ In</span><span id="ep-in">—</span></div>
+    <div class="ep-section">Errors</div>
+    <div class="info-row"><span class="info-label">↑ Out</span><span id="ep-err-out">—</span></div>
+    <div class="info-row"><span class="info-label">↓ In</span><span id="ep-err-in">—</span></div>
+    <div class="info-row" id="ep-stp-row" style="display:none"><span class="info-label">STP</span><span id="ep-stp">—</span></div>
+    <div id="ep-cached-row" style="display:none;font-size:11px;color:#484f58;margin-top:10px;border-top:1px solid #21262d;padding-top:8px"></div>
+    <div id="ep-chart-wrap">
+      <div class="ep-section" style="display:flex;align-items:center;justify-content:space-between">
+        <span>Traffic history (24h)</span>
+        <button id="ep-expand-btn" onclick="expandChart()" title="Expand chart"
+          style="background:none;border:none;color:#8b949e;cursor:pointer;font-size:15px;padding:0;line-height:1">⤢</button>
+      </div>
+      <canvas id="ep-chart" style="width:100%;height:70px;display:block;border-radius:3px"></canvas>
+      <div style="font-size:10px;color:#484f58;text-align:right;margin-top:3px">
+        <span style="color:#3fb950">─ ↑out</span>&nbsp;&nbsp;<span style="color:#388bfd">─ ↓in</span>
+      </div>
+    </div>
+    <div class="ep-section">Poll</div>
+    <div class="info-row"><span class="info-label">Updated</span><span id="ep-updated" style="font-variant-numeric:tabular-nums">—</span></div>
+    <div class="info-row"><span class="info-label">Next in</span><span id="ep-next"    style="font-variant-numeric:tabular-nums">—</span></div>
+    <button id="ep-refresh-btn" onclick="refreshLinkCounters()" style="width:100%;margin-top:10px">↻ Refresh counters</button>
+  </div>
+  <div id="ep-pane-vlans" style="display:none">
+    <div id="ep-vlans-content"></div>
+  </div>
   <div id="ep-refresh-status" style="font-size:11px;margin-top:5px;text-align:center"></div>
 </div>
 
@@ -500,6 +516,7 @@
     <button class="np-tab"        onclick="npTab('vlan')">VLAN</button>
     <button class="np-tab"        onclick="npTab('mac')">MAC</button>
     <button class="np-tab"        onclick="npTab('ports')">Ports</button>
+    <button class="np-tab"        onclick="npTab('sfp')">SFP</button>
   </div>
 
   <div id="np-pane-info" class="np-pane">
@@ -551,6 +568,9 @@
                color:#c9d1d9;border-radius:4px;padding:4px 8px;font-size:12px;outline:none">
     </div>
     <div id="np-ports-content"></div>
+  </div>
+  <div id="np-pane-sfp" class="np-pane" style="display:none">
+    <div id="np-sfp-content"></div>
   </div>
 </div>
 
@@ -1025,12 +1045,13 @@ let _npActiveTab = 'info';
 function npTab(name) {
   if (_npActiveTab === 'ports' && name !== 'ports') _stopPortsPolling();
   _npActiveTab = name;
-  ['info', 'lldp', 'traffic', 'vlan', 'mac', 'ports'].forEach((t, i) => {
+  ['info', 'lldp', 'traffic', 'vlan', 'mac', 'ports', 'sfp'].forEach((t, i) => {
     document.getElementById('np-pane-' + t).style.display = t === name ? '' : 'none';
     document.querySelectorAll('.np-tab')[i].classList.toggle('active', t === name);
   });
   if (name === 'mac'   && _currentNodeId) _renderMacTab(_currentNodeId);
   if (name === 'ports' && _currentNodeId) _startPortsPolling(_currentNodeId);
+  if (name === 'sfp'   && _currentNodeId) _loadSfpTab(_currentNodeId);
 }
 
 function _renderVlanTab(nodeId) {
@@ -1081,8 +1102,12 @@ function _renderLldpTab(nodeId) {
     const remName = escHtml(remNode?.label || remId);
     const remPort = escHtml(isFrom ? (e.remote_port || '?') : (e.local_port || '?'));
     const speed   = escHtml(e.local_port_speed || '—');
-    const stp     = e.stp_state && e.stp_state !== 'forwarding'
-      ? `<span style="color:${e.stp_state==='blocking'?'#8957e5':'#e3b341'}">${escHtml(e.stp_state)}</span>` : '';
+    const stpColor = e.stp_state === 'blocking'  ? '#8957e5'
+                   : e.stp_state === 'forwarding' ? '#484f58'
+                   : e.stp_state === 'disabled'   ? '#484f58'
+                   : '#e3b341';
+    const stp = e.stp_state
+      ? `<span style="color:${stpColor}">${escHtml(e.stp_state)}</span>` : '';
     return `<tr>
       <td title="${locPort}">${locPort}</td>
       <td title="${remName}" style="max-width:130px">${remName}</td>
@@ -1350,6 +1375,79 @@ function _stopPortsPolling() {
   if (_portsInterval !== null) { clearInterval(_portsInterval); _portsInterval = null; }
 }
 
+async function _loadSfpTab(nodeId) {
+  const node = currentData.nodes.find(n => n.id === nodeId);
+  const el   = document.getElementById('np-sfp-content');
+  if (!node?.ip) {
+    el.innerHTML = '<div style="color:#484f58;font-size:12px;padding:8px 0">No IP address</div>';
+    return;
+  }
+  el.innerHTML = '<div style="color:#484f58;font-size:12px;padding:8px 0">Loading…</div>';
+  try {
+    const r = await fetch(`/api/switch_sfp?switch_ip=${encodeURIComponent(node.ip)}`);
+    if (!r.ok) throw new Error(r.status);
+    const data = await r.json();
+    if (_npActiveTab === 'sfp' && _currentNodeId === nodeId) _renderSfpTable(data);
+  } catch {
+    if (_npActiveTab === 'sfp' && _currentNodeId === nodeId)
+      el.innerHTML = '<div style="color:#f85149;font-size:12px;padding:8px 0">Poll error</div>';
+  }
+}
+
+function _renderSfpTable(ports) {
+  const el = document.getElementById('np-sfp-content');
+  if (!ports.length) {
+    el.innerHTML = '<div style="color:#484f58;font-size:12px;padding:8px 0">No transceiver data</div>';
+    return;
+  }
+  const dbmColor = (dbm) => {
+    if (dbm === null || dbm === undefined) return '#484f58';
+    if (dbm < -30) return '#f85149';
+    if (dbm < -20) return '#e3b341';
+    return '#3fb950';
+  };
+  const fmt = (v, suffix='') => (v !== null && v !== undefined) ? escHtml(String(v)) + suffix : '<span style="color:#484f58">—</span>';
+  const fmtDbm = (v) => {
+    if (v === null || v === undefined) return '<span style="color:#484f58">—</span>';
+    return `<span style="color:${dbmColor(v)}">${v > 0 ? '+' : ''}${v}</span>`;
+  };
+
+  const showLink  = ports.some(p => p.link_up !== null);
+  const showTemp  = ports.some(p => p.temp_c  !== null);
+
+  let rows = ports.map(p => `
+    <tr>
+      <td style="padding:2px 6px 2px 0;font-size:11px;white-space:nowrap">
+        ${showLink ? `<span style="color:${p.link_up ? '#3fb950' : '#484f58'};margin-right:4px">●</span>` : ''}
+        ${escHtml(p.port)}
+      </td>
+      <td style="padding:2px 6px 2px 0;font-size:11px;color:#8b949e">${fmt(p.type || p.part)}</td>
+      <td style="padding:2px 6px 2px 0;font-size:11px;color:#8b949e">${fmt(p.wavelength)}</td>
+      <td style="padding:2px 4px 2px 0;font-size:11px;text-align:right">${fmtDbm(p.tx_dbm)}</td>
+      <td style="padding:2px 4px 2px 0;font-size:11px;text-align:right">${fmtDbm(p.rx_dbm)}</td>
+      ${showTemp ? `<td style="padding:2px 0 2px 4px;font-size:11px;color:#8b949e;text-align:right">${fmt(p.temp_c, '°')}</td>` : ''}
+    </tr>`).join('');
+
+  el.innerHTML = `
+    <div style="font-size:10px;color:#484f58;margin-bottom:6px">
+      ${ports.length} transceivers
+      · <span style="color:#3fb950">●</span> &gt;-20 dBm
+      · <span style="color:#e3b341">●</span> &gt;-30 dBm
+      · <span style="color:#f85149">●</span> weak/LOS
+    </div>
+    <table style="width:100%;border-collapse:collapse">
+      <thead><tr style="color:#8b949e;font-size:10px;font-weight:normal">
+        <th style="text-align:left;padding-bottom:4px">Port</th>
+        <th style="text-align:left;padding-bottom:4px">Type</th>
+        <th style="text-align:left;padding-bottom:4px">λ</th>
+        <th style="text-align:right;padding-bottom:4px">TX</th>
+        <th style="text-align:right;padding-bottom:4px">RX</th>
+        ${showTemp ? '<th style="text-align:right;padding-bottom:4px">Temp</th>' : ''}
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
 function onNodeClick(params) {
   if (!params.nodes.length) {
     closePanel();
@@ -1429,6 +1527,7 @@ function closePanel() {
 function showEdgePanel(edgeVisId) {
   const raw = currentData.edges[edgeVisId];
   if (!raw) { closeEdgePanel(); return; }
+  epTab('info');
   _currentEdgeId = edgeVisId;
 
   const fromNode = currentData.nodes.find(n => n.id === raw.from);
@@ -1487,6 +1586,8 @@ function showEdgePanel(edgeVisId) {
   const hasChart = canRefresh;
   document.getElementById('ep-chart-wrap').style.display = hasChart ? '' : 'none';
 
+  _renderEdgeVlans(fromNode, toNode, raw);
+
   document.getElementById('edge-panel').style.display = 'flex';
   _updateEdgePanelTimer();
 
@@ -1538,9 +1639,96 @@ async function refreshLinkCounters() {
   btn.textContent = '↻ Refresh counters';
 }
 
+function epTab(name) {
+  ['info', 'vlans'].forEach((t, i) => {
+    document.getElementById('ep-pane-' + t).style.display = t === name ? '' : 'none';
+    document.querySelectorAll('.ep-tab')[i].classList.toggle('active', t === name);
+  });
+}
+
 function closeEdgePanel() {
   document.getElementById('edge-panel').style.display = 'none';
   _currentEdgeId = null;
+}
+
+function _getPortVlans(node, portNum) {
+  const result = new Map();
+  if (!node || !portNum) return result;
+  const portNumInt = parseInt(portNum, 10);
+  const pvid = (node.port_pvid || {})[portNum];
+  for (const vl of (node.vlans || [])) {
+    const eg = vl.egress || [];
+    const inEgress = eg.some(p => p === portNum || p === portNumInt || String(p) === portNum);
+    if (inEgress) {
+      const un = vl.untagged || [];
+      const isTagged = !un.some(p => p === portNum || p === portNumInt || String(p) === portNum);
+      result.set(vl.id, { name: vl.name || `VLAN${vl.id}`, tagged: isTagged });
+    }
+  }
+  if (pvid != null && !result.has(pvid)) {
+    const vl = (node.vlans || []).find(v => v.id === pvid);
+    result.set(pvid, { name: vl ? (vl.name || `VLAN${pvid}`) : `VLAN${pvid}`, tagged: false });
+  }
+  return result;
+}
+
+function _renderEdgeVlans(fromNode, toNode, raw) {
+  const el        = document.getElementById('ep-vlans-content');
+  const fromVlans = _getPortVlans(fromNode, raw.local_port_num);
+  const toVlans   = _getPortVlans(toNode,   raw.remote_port_num);
+  if (!fromVlans.size && !toVlans.size) {
+    el.innerHTML = '<div style="color:#484f58;font-size:12px;padding:8px 0">No VLAN data</div>';
+    return;
+  }
+
+  const allIds  = new Set([...fromVlans.keys(), ...toVlans.keys()]);
+  const both    = [], onlyFrom = [], onlyTo = [];
+  for (const id of [...allIds].sort((a, b) => a - b)) {
+    if (fromVlans.has(id) && toVlans.has(id)) both.push(id);
+    else if (fromVlans.has(id))               onlyFrom.push(id);
+    else                                       onlyTo.push(id);
+  }
+
+  const fromLabel = escHtml((fromNode?.label || raw.from || '').split('\n')[0]);
+  const toLabel   = escHtml((toNode?.label   || raw.to   || '').split('\n')[0]);
+
+  const tagBadge = (tagged) => tagged
+    ? '<span style="font-size:9px;color:#484f58;margin-left:3px">T</span>' : '';
+
+  const cell = (vlanObj, dim) => {
+    if (!vlanObj) return `<td style="padding:1px 4px 1px 0;font-size:11px;color:#484f58">—</td>`;
+    return `<td style="padding:1px 4px 1px 0;font-size:11px${dim ? ';color:#484f58' : ''}">` +
+      `${escHtml(vlanObj.name)}${tagBadge(vlanObj.tagged)}</td>`;
+  };
+
+  let rows = both.map(id =>
+    `<tr>${cell(fromVlans.get(id), false)}${cell(toVlans.get(id), false)}</tr>`
+  );
+
+  const mismatch = [
+    ...onlyFrom.map(id => ({ id, from: fromVlans.get(id), to: null })),
+    ...onlyTo.map(id =>   ({ id, from: null,              to: toVlans.get(id) })),
+  ].sort((a, b) => a.id - b.id);
+
+  if (mismatch.length) {
+    if (both.length) rows.push(`<tr><td colspan="2" style="padding:3px 0 0;border-top:1px solid #21262d"></td></tr>`);
+    rows = rows.concat(mismatch.map(({ from, to }) =>
+      `<tr>${cell(from, !from)}${cell(to, !to)}</tr>`
+    ));
+  }
+
+  el.innerHTML = `
+    <div style="font-size:10px;color:#484f58;margin-bottom:6px">
+      ${both.length + onlyFrom.length + onlyTo.length} VLANs
+      · <span style="color:#484f58">T = tagged</span>
+    </div>
+    <table style="width:100%;border-collapse:collapse">
+      <thead><tr>
+        <th style="text-align:left;font-size:10px;color:#8b949e;font-weight:normal;padding-bottom:4px">${fromLabel}</th>
+        <th style="text-align:left;font-size:10px;color:#8b949e;font-weight:normal;padding-bottom:4px">${toLabel}</th>
+      </tr></thead>
+      <tbody>${rows.join('')}</tbody>
+    </table>`;
 }
 
 function _fmtCountdown(s) {

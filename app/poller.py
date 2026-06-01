@@ -40,10 +40,12 @@ OID_IF_OPER_STATUS  = "1.3.6.1.2.1.2.2.1.8"
 OID_IF_SPEED        = "1.3.6.1.2.1.2.2.1.5"   # bps, 32-bit
 OID_IF_HIGH_SPEED   = "1.3.6.1.31.1.1.1.15"   # Mbps, 64-bit (ifXTable, optional)
 OID_IF_ALIAS        = "1.3.6.1.2.1.31.1.1.1.18"  # ifAlias — admin description
-OID_IF_IN_OCTETS   = "1.3.6.1.2.1.2.2.1.10"
-OID_IF_OUT_OCTETS  = "1.3.6.1.2.1.2.2.1.16"
-OID_IF_IN_ERRORS   = "1.3.6.1.2.1.2.2.1.14"
-OID_IF_OUT_ERRORS  = "1.3.6.1.2.1.2.2.1.20"
+OID_IF_IN_OCTETS    = "1.3.6.1.2.1.2.2.1.10"   # 32-bit, fallback only
+OID_IF_OUT_OCTETS   = "1.3.6.1.2.1.2.2.1.16"   # 32-bit, fallback only
+OID_IF_HC_IN_OCTETS = "1.3.6.1.2.1.31.1.1.1.6"  # ifHCInOctets,  64-bit
+OID_IF_HC_OUT_OCTETS= "1.3.6.1.2.1.31.1.1.1.10" # ifHCOutOctets, 64-bit
+OID_IF_IN_ERRORS    = "1.3.6.1.2.1.2.2.1.14"
+OID_IF_OUT_ERRORS   = "1.3.6.1.2.1.2.2.1.20"
 
 # BRIDGE-MIB / STP OIDs
 OID_STP_ROOT_PORT  = "1.3.6.1.2.1.17.2.2.0"   # 0 if this switch is root
@@ -59,10 +61,23 @@ OID_DOT1Q_VLAN_FDBID = "1.3.6.1.2.1.17.7.1.4.2.1.3"  # timeMark.vlan_id → fdb_
 OID_DOT1D_FDB_PORT   = "1.3.6.1.2.1.17.4.3.1.2"       # a.b.c.d.e.f → bridge port
 OID_DOT1D_FDB_STATUS = "1.3.6.1.2.1.17.4.3.1.3"       # a.b.c.d.e.f → status
 
+# HP-ICF-TRANSCEIVER-MIB (ProVision firmware: 3810M, 2540, 2530, etc.)
+OID_XCVR_TABLE   = "1.3.6.1.4.1.11.2.14.11.5.1.82.1.1.1.1"
+OID_XCVR_PORT    = OID_XCVR_TABLE + ".2"   # port name
+OID_XCVR_PART    = OID_XCVR_TABLE + ".3"   # part number
+OID_XCVR_SERIAL  = OID_XCVR_TABLE + ".4"   # serial number
+OID_XCVR_TYPE    = OID_XCVR_TABLE + ".5"   # type string (e.g. "SFP+LR")
+OID_XCVR_WL      = OID_XCVR_TABLE + ".7"   # wavelength string
+OID_XCVR_DIAG    = OID_XCVR_TABLE + ".10"  # DOM capable: 2=yes
+OID_XCVR_TX_PWR  = OID_XCVR_TABLE + ".11"  # TX power, 0.01 µW units
+OID_XCVR_RX_PWR  = OID_XCVR_TABLE + ".12"  # RX power, 0.01 µW units
+OID_XCVR_TX_BIAS = OID_XCVR_TABLE + ".13"  # TX bias current, µA
+
 _STP_STATES = {"1": "disabled", "2": "blocking", "3": "listening",
                "4": "learning",  "5": "forwarding", "6": "broken"}
 
 _MAX_32BIT = 4_294_967_295
+_MAX_64BIT = 18_446_744_073_709_551_615
 
 
 def _fmt_speed(bps_str: str, mbps_str: str = "") -> str:
@@ -86,14 +101,16 @@ def _fmt_speed(bps_str: str, mbps_str: str = "") -> str:
     return ""
 
 
-def _counter_delta_bps(curr: str, prev: str, elapsed_s: float) -> float | None:
+def _counter_delta_bps(curr: str, prev: str, elapsed_s: float,
+                        is64: bool = True) -> float | None:
     if elapsed_s <= 0:
         return None
     try:
         c, p = int(curr), int(prev)
-        delta = c - p if c >= p else (_MAX_32BIT - p + c + 1)
+        wrap = _MAX_64BIT if is64 else _MAX_32BIT
+        delta = c - p if c >= p else (wrap - p + c + 1)
         rate = delta / elapsed_s
-        return rate if rate <= 10_000_000_000 else None  # sanity: max 10G
+        return rate if rate <= 400_000_000_000 else None  # sanity: max 400G
     except Exception:
         return None
 
@@ -309,6 +326,7 @@ async def aruba_rest_vlans(ip: str, user: str, pwd: str, timeout: int) -> dict:
 
             r_vlans = await client.get(f"{base}/rest/v1/system/vlans?depth=2")
             r_ports = await client.get(f"{base}/rest/v1/system/ports?depth=2")
+            await client.post(f"{base}/rest/v1/logout")
 
         vlan_data  = r_vlans.json() if r_vlans.status_code == 200 else {}
         ports_raw  = r_ports.json() if r_ports.status_code == 200 else {}
@@ -349,18 +367,18 @@ async def aruba_rest_vlans(ip: str, user: str, pwd: str, timeout: int) -> dict:
         for pname, pobj in ports_data.items():
             if not isinstance(pobj, dict):
                 continue
-            mode = pobj.get("vlan_mode", "")
+            mode = pobj.get("vlan_mode") or pobj.get("applied_vlan_mode", "")
             if mode == "access":
-                vid = _resolve_vid(pobj.get("vlan_tag"))
+                vid = _resolve_vid(pobj.get("applied_vlan_tag") or pobj.get("vlan_tag"))
                 if vid:
                     port_pvid[pname] = vid
                     vlan_ports.setdefault(vid, set()).add(pname)
             elif mode in ("trunk", "native-untagged", "native-tagged"):
-                for tag in (pobj.get("vlan_trunks") or []):
+                for tag in (pobj.get("vlan_trunks") or pobj.get("applied_vlan_trunks") or []):
                     vid = _resolve_vid(tag)
                     if vid:
                         vlan_ports.setdefault(vid, set()).add(pname)
-                native = pobj.get("vlan_tag")
+                native = pobj.get("applied_vlan_tag") or pobj.get("vlan_tag")
                 if native:
                     vid = _resolve_vid(native)
                     if vid:
@@ -400,33 +418,36 @@ async def poll_switch(ip: str, community: str, timeout: int, retries: int,
         rem_names, rem_port_desc,
         rem_man_addrs, rem_chassis_sub, rem_chassis_ids, rem_sys_cap_raw,
         if_status, if_speed_bps, if_speed_mbps,
-        if_in_oct, if_out_oct, if_in_err, if_out_err,
+        if_in_oct, if_out_oct, if_hc_in_oct, if_hc_out_oct,
+        if_in_err, if_out_err,
         stp_port_state_raw, stp_port_ifidx_raw,
         stp_root_port_val, sys_descr_raw,
         vlan_names_raw, vlan_egress_raw, vlan_untagged_raw, port_pvid_raw,
     ) = await asyncio.gather(
-        snmp_walk(ip, community, OID_IF_DESCR,             timeout, retries),
-        snmp_walk(ip, community, OID_REM_SYS_NAME,         timeout, retries),
-        snmp_walk(ip, community, OID_REM_PORT_DESC,        timeout, retries),
-        snmp_walk(ip, community, OID_REM_MAN_ADDR,         timeout, retries),
-        snmp_walk(ip, community, OID_REM_CHASSIS_SUBTYPE,  timeout, retries),
-        snmp_walk(ip, community, OID_REM_CHASSIS_ID,       timeout, retries),
-        snmp_walk(ip, community, OID_REM_SYS_CAP,          timeout, retries),
-        snmp_walk(ip, community, OID_IF_OPER_STATUS,       timeout, retries),
-        snmp_walk(ip, community, OID_IF_SPEED,             timeout, retries),
-        snmp_walk(ip, community, OID_IF_HIGH_SPEED,        timeout, retries),
-        snmp_walk(ip, community, OID_IF_IN_OCTETS,         timeout, retries),
-        snmp_walk(ip, community, OID_IF_OUT_OCTETS,        timeout, retries),
-        snmp_walk(ip, community, OID_IF_IN_ERRORS,         timeout, retries),
-        snmp_walk(ip, community, OID_IF_OUT_ERRORS,        timeout, retries),
-        snmp_walk(ip, community, OID_STP_PORT_STATE,       timeout, retries),
-        snmp_walk(ip, community, OID_STP_PORT_IFIDX,       timeout, retries),
-        snmp_get(ip,  community, OID_STP_ROOT_PORT,        timeout, retries),
-        snmp_get(ip,  community, OID_SYS_DESCR,            timeout, retries),
-        snmp_walk(ip, community, OID_DOT1Q_VLAN_NAMES,    timeout, retries),
-        snmp_walk(ip, community, OID_DOT1Q_VLAN_EGRESS,   timeout, retries),
-        snmp_walk(ip, community, OID_DOT1Q_VLAN_UNTAGGED, timeout, retries),
-        snmp_walk(ip, community, OID_DOT1Q_PVID,          timeout, retries),
+        snmp_walk(ip, community, OID_IF_DESCR,              timeout, retries),
+        snmp_walk(ip, community, OID_REM_SYS_NAME,          timeout, retries),
+        snmp_walk(ip, community, OID_REM_PORT_DESC,         timeout, retries),
+        snmp_walk(ip, community, OID_REM_MAN_ADDR,          timeout, retries),
+        snmp_walk(ip, community, OID_REM_CHASSIS_SUBTYPE,   timeout, retries),
+        snmp_walk(ip, community, OID_REM_CHASSIS_ID,        timeout, retries),
+        snmp_walk(ip, community, OID_REM_SYS_CAP,           timeout, retries),
+        snmp_walk(ip, community, OID_IF_OPER_STATUS,        timeout, retries),
+        snmp_walk(ip, community, OID_IF_SPEED,              timeout, retries),
+        snmp_walk(ip, community, OID_IF_HIGH_SPEED,         timeout, retries),
+        snmp_walk(ip, community, OID_IF_IN_OCTETS,          timeout, retries),
+        snmp_walk(ip, community, OID_IF_OUT_OCTETS,         timeout, retries),
+        snmp_walk(ip, community, OID_IF_HC_IN_OCTETS,       timeout, retries),
+        snmp_walk(ip, community, OID_IF_HC_OUT_OCTETS,      timeout, retries),
+        snmp_walk(ip, community, OID_IF_IN_ERRORS,          timeout, retries),
+        snmp_walk(ip, community, OID_IF_OUT_ERRORS,         timeout, retries),
+        snmp_walk(ip, community, OID_STP_PORT_STATE,        timeout, retries),
+        snmp_walk(ip, community, OID_STP_PORT_IFIDX,        timeout, retries),
+        snmp_get(ip,  community, OID_STP_ROOT_PORT,         timeout, retries),
+        snmp_get(ip,  community, OID_SYS_DESCR,             timeout, retries),
+        snmp_walk(ip, community, OID_DOT1Q_VLAN_NAMES,     timeout, retries),
+        snmp_walk(ip, community, OID_DOT1Q_VLAN_EGRESS,    timeout, retries),
+        snmp_walk(ip, community, OID_DOT1Q_VLAN_UNTAGGED,  timeout, retries),
+        snmp_walk(ip, community, OID_DOT1Q_PVID,           timeout, retries),
     )
 
     sys_descr = re.sub(r'\s*\(/\S.*$', '', (sys_descr_raw or "").split("\n")[0]).strip()
@@ -480,16 +501,21 @@ async def poll_switch(ip: str, community: str, timeout: int, retries: int,
         if state and ifidx:
             stp_by_ifidx[ifidx.strip()] = _STP_STATES.get(state.strip(), "")
 
-    # IF counters keyed by port num (we assume lldpPortNum ≈ ifIndex)
-    all_ports = set(if_in_oct) | set(if_out_oct)
+    # IF counters keyed by port num (we assume lldpPortNum ≈ ifIndex).
+    # Prefer 64-bit HC counters (ifHCInOctets/ifHCOutOctets) to avoid
+    # 32-bit wrap issues on 10G+ links (wraps every ~3.4 s at full speed).
+    all_ports = set(if_in_oct) | set(if_out_oct) | set(if_hc_in_oct) | set(if_hc_out_oct)
     if_counters: dict[str, dict] = {}
     for pn in all_ports:
         try:
+            hc_in  = if_hc_in_oct.get(pn)
+            hc_out = if_hc_out_oct.get(pn)
             if_counters[pn] = {
-                "in_octets":  int(if_in_oct.get(pn, 0)),
-                "out_octets": int(if_out_oct.get(pn, 0)),
+                "in_octets":  int(hc_in  if hc_in  is not None else if_in_oct.get(pn,  0)),
+                "out_octets": int(hc_out if hc_out is not None else if_out_oct.get(pn, 0)),
                 "in_errors":  int(if_in_err.get(pn, 0)),
                 "out_errors": int(if_out_err.get(pn, 0)),
+                "hc":         hc_in is not None,  # flag for delta function
             }
         except (ValueError, TypeError):
             pass
@@ -677,9 +703,10 @@ async def build_topology() -> dict:
                 except Exception:
                     elapsed = 0
 
+                is64 = bool(ctr.get("hc"))
                 traffic_lookup[(r["name"], port_num)] = {
-                    "in_bps":    _counter_delta_bps(ctr["in_octets"],  prev.get("in_octets"),  elapsed),
-                    "out_bps":   _counter_delta_bps(ctr["out_octets"], prev.get("out_octets"), elapsed),
+                    "in_bps":    _counter_delta_bps(ctr["in_octets"],  prev.get("in_octets"),  elapsed, is64),
+                    "out_bps":   _counter_delta_bps(ctr["out_octets"], prev.get("out_octets"), elapsed, is64),
                     "in_err_s":  _counter_delta_rate(ctr["in_errors"],  prev.get("in_errors"),  elapsed),
                     "out_err_s": _counter_delta_rate(ctr["out_errors"], prev.get("out_errors"), elapsed),
                 }
@@ -840,6 +867,122 @@ async def poll_switch_ports(ip: str, community: str, timeout: int, retries: int)
             "alias": if_alias_r.get(idx, ""),
         })
     return ports
+
+
+def _uw_to_dbm(val_001uw: int | None) -> float | None:
+    """Convert HP-ICF xcvr power value (0.01 µW units) to dBm."""
+    if val_001uw is None or val_001uw <= 0:
+        return None
+    import math
+    mw = val_001uw * 0.01 / 1000
+    return round(10 * math.log10(mw), 2)
+
+
+async def poll_switch_sfp(ip: str, community: str, timeout: int,
+                          user: str = "", pwd: str = "") -> list[dict]:
+    """Return transceiver DOM data for all ports with an SFP inserted.
+
+    Tries Aruba CX REST API first (pm_monitor), falls back to HP-ICF-TRANSCEIVER-MIB
+    for ProVision switches (3810M, 2540, etc.).
+    Returns list of dicts: {port, type, wavelength, part, serial,
+                             tx_dbm, rx_dbm, tx_bias_ma}.
+    """
+    # ── Aruba CX REST (ArubaOS-CX firmware FL.xx / PL.xx) ─────────────────
+    if user and pwd:
+        base = f"https://{ip}"
+        for api_ver in ("v10.13", "v10.10", "v10.09", "v10.08"):
+            try:
+                async with httpx.AsyncClient(verify=False, timeout=timeout) as client:
+                    r = await client.post(
+                        f"{base}/rest/{api_ver}/login",
+                        data={"username": user, "password": pwd},
+                    )
+                    if r.status_code != 200:
+                        continue
+                    r2 = await client.get(
+                        f"{base}/rest/{api_ver}/system/interfaces"
+                        f"?attributes=name,link_state,pm_info,pm_monitor&depth=2"
+                    )
+                    await client.post(f"{base}/rest/{api_ver}/logout")
+                    if r2.status_code != 200:
+                        break
+                    data = r2.json()
+
+                result = []
+                for iface_data in data.values():
+                    if not isinstance(iface_data, dict):
+                        continue
+                    pm_info    = iface_data.get("pm_info") or {}
+                    pm_monitor = iface_data.get("pm_monitor") or {}
+                    if not pm_info.get("dom_supported"):
+                        continue
+                    lane = pm_monitor.get("1") or {}
+                    common = pm_monitor.get("common") or {}
+                    import math
+                    def _mw_dbm(mw):
+                        if mw and mw > 0:
+                            return round(10 * math.log10(mw), 2)
+                        return None
+                    result.append({
+                        "port":       iface_data.get("name", ""),
+                        "type":       pm_info.get("xcvr_desc", ""),
+                        "wavelength": str(pm_info.get("wavelength", "")) + "nm" if pm_info.get("wavelength") else "",
+                        "part":       pm_info.get("proprietary_product_number") or pm_info.get("vendor_part_number", ""),
+                        "serial":     pm_info.get("vendor_serial_number", ""),
+                        "tx_dbm":     _mw_dbm(lane.get("tx_power")),
+                        "rx_dbm":     _mw_dbm(lane.get("rx_power")),
+                        "tx_bias_ma": round(lane["tx_bias"], 2) if lane.get("tx_bias") else None,
+                        "temp_c":     round(common["temperature"], 1) if common.get("temperature") is not None else None,
+                        "link_up":    iface_data.get("link_state") == "up",
+                    })
+                result.sort(key=lambda x: x["port"])
+                return result
+            except Exception as e:
+                log.debug("Aruba REST SFP %s %s: %s", ip, api_ver, e)
+                break
+
+    # ── HP-ICF-TRANSCEIVER-MIB (ProVision: 3810M, 2540, 2530 …) ────────────
+    try:
+        xcvr_port, xcvr_part, xcvr_serial, xcvr_type, xcvr_wl, \
+        xcvr_diag, xcvr_tx, xcvr_rx, xcvr_bias = await asyncio.gather(
+            snmp_walk(ip, community, OID_XCVR_PORT,    timeout, 1),
+            snmp_walk(ip, community, OID_XCVR_PART,    timeout, 1),
+            snmp_walk(ip, community, OID_XCVR_SERIAL,  timeout, 1),
+            snmp_walk(ip, community, OID_XCVR_TYPE,    timeout, 1),
+            snmp_walk(ip, community, OID_XCVR_WL,      timeout, 1),
+            snmp_walk(ip, community, OID_XCVR_DIAG,    timeout, 1),
+            snmp_walk(ip, community, OID_XCVR_TX_PWR,  timeout, 1),
+            snmp_walk(ip, community, OID_XCVR_RX_PWR,  timeout, 1),
+            snmp_walk(ip, community, OID_XCVR_TX_BIAS, timeout, 1),
+        )
+        if not xcvr_port:
+            return []
+        result = []
+        for idx in xcvr_port:
+            try:
+                tx_raw = int(xcvr_tx.get(idx, 0)) if xcvr_tx.get(idx) else None
+                rx_raw = int(xcvr_rx.get(idx, 0)) if xcvr_rx.get(idx) else None
+                bias   = int(xcvr_bias.get(idx, 0)) if xcvr_bias.get(idx) else None
+                result.append({
+                    "port":       xcvr_port.get(idx, idx).strip(),
+                    "type":       xcvr_type.get(idx, "").strip(),
+                    "wavelength": xcvr_wl.get(idx, "").strip(),
+                    "part":       xcvr_part.get(idx, "").strip(),
+                    "serial":     xcvr_serial.get(idx, "").strip(),
+                    "tx_dbm":     _uw_to_dbm(tx_raw),
+                    "rx_dbm":     _uw_to_dbm(rx_raw),
+                    "tx_bias_ma": round(bias / 1000, 2) if bias else None,
+                    "temp_c":     None,
+                    "link_up":    None,
+                })
+            except (ValueError, TypeError):
+                continue
+        result.sort(key=lambda x: (len(x["port"]), x["port"]))
+        return result
+    except Exception as e:
+        log.debug("HP-ICF SFP %s: %s", ip, e)
+
+    return []
 
 
 def _mac_from_suffix(parts: list[str]) -> str | None:
