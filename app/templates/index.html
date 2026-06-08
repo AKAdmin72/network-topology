@@ -246,6 +246,30 @@
     #cm-chart  { width: 100%; height: 220px; display: block; border-radius: 4px; }
     .cm-range-btn { font-size: 12px; padding: 3px 9px; }
 
+    /* Port live-traffic modal */
+    #port-live-modal {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.75);
+      z-index: 700; display: none; align-items: center; justify-content: center;
+    }
+    #port-live-modal.open { display: flex; }
+    #pl-inner {
+      background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+      padding: 16px; width: min(560px, 96vw);
+    }
+    #pl-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+    #pl-title  { color: #58a6ff; font-size: 13px; font-weight: 600; }
+    #pl-meters { display: flex; gap: 32px; margin-bottom: 14px; }
+    .pl-dir    { font-size: 11px; color: #8b949e; margin-bottom: 3px; }
+    .pl-val    { font-size: 28px; font-weight: 700; font-family: monospace; color: #c9d1d9; transition: color .3s; }
+    .pl-pct    { font-size: 11px; color: #8b949e; margin-top: 2px; height: 14px; }
+    #pl-sparkline { width: 100%; height: 90px; display: block; border-radius: 4px; margin-bottom: 4px; }
+    .pl-chart-lbl { font-size: 11px; color: #484f58; margin-bottom: 4px; }
+    .pl-btn { background: none; border: none; color: #6e7681; cursor: pointer;
+              font-size: 13px; padding: 1px 4px; border-radius: 3px; line-height: 1;
+              vertical-align: middle; opacity: 0; transition: opacity .15s; }
+    tr:hover .pl-btn { opacity: 1; }
+    .pl-btn:hover { color: #58a6ff; background: #21262d; }
+
     /* MAC search combobox */
     #mac-filter-wrap { position: relative; }
     #mac-combo-inner { position: relative; display: flex; align-items: center; }
@@ -1268,6 +1292,8 @@ let _portsData     = [];
 let _portsFilter   = '';
 let _portsSortCol  = 'name';
 let _portsSortDir  = 1;
+let _portsIp       = null;
+let _portsNodeName = '';
 
 function _portsFilterChanged() {
   _portsFilter = document.getElementById('np-ports-filter')?.value || '';
@@ -1322,11 +1348,19 @@ function _renderPortsTable(ports) {
   const countLine = q
     ? `${visible.length} of ${ports.length} · ${up} active`
     : `${up} / ${total} ports active`;
-  const rows  = visible.map(p => `<tr>
-    <td style="font-family:monospace;font-size:11px">${escHtml(p.name)}</td>
+  const ip   = _portsIp       || '';
+  const name = _portsNodeName || '';
+  const rows  = visible.map(p => {
+    const btn = (p.admin !== '2')
+      ? `<button class="pl-btn" title="Live traffic"
+           onclick='_openPortLive(${JSON.stringify(ip)},${JSON.stringify(p.idx)},${JSON.stringify(p.name)},${JSON.stringify(name)},${JSON.stringify(p.speed)})'>⬤</button>`
+      : '';
+    return `<tr>
+    <td style="font-family:monospace;font-size:11px">${escHtml(p.name)}${btn}</td>
     <td>${dot(p.admin, p.oper)} ${statusText(p.admin, p.oper)}</td>
     <td class="dim" style="font-size:11px">${escHtml(p.alias)}</td>
-  </tr>`).join('');
+  </tr>`;
+  }).join('');
   el.innerHTML = `
     <div style="font-size:11px;color:#484f58;margin-bottom:6px">
       ${countLine} · <span id="np-ports-ts">↻ ${now}</span>
@@ -1354,6 +1388,8 @@ function _startPortsPolling(nodeId) {
     return;
   }
   const ip = node.ip;
+  _portsIp       = ip;
+  _portsNodeName = node.label || node.id;
   const poll = async () => {
     try {
       const r = await fetch(`/api/switch_ports?switch_ip=${encodeURIComponent(ip)}`);
@@ -2721,6 +2757,171 @@ function focusPathNode(nodeId) {
   network.selectNodes([nodeId]);
 }
 // ─────────────────────────────────────────────────────────────────────────────
+
+// ── Port live traffic modal ───────────────────────────────────────────────────
+let _portLiveInterval = null;
+let _portLiveSparkData = [];
+let _portLiveIp    = null;
+let _portLiveIdx   = null;
+let _portLiveSpeed = 0;   // link capacity in bps, 0 = unknown
+
+function _parseSpeedBps(s) {
+  if (!s) return 0;
+  const m = String(s).match(/^(\d+(?:\.\d+)?)\s*(G|M|K)?$/i);
+  if (!m) return 0;
+  const v = parseFloat(m[1]);
+  switch ((m[2] || '').toUpperCase()) {
+    case 'G': return v * 1e9;
+    case 'M': return v * 1e6;
+    case 'K': return v * 1e3;
+    default:  return v;
+  }
+}
+
+function _bpsColor(bps) {
+  if (!_portLiveSpeed || bps == null) return '#c9d1d9';
+  const p = bps / _portLiveSpeed;
+  if (p > 0.8) return '#f85149';
+  if (p > 0.4) return '#f0c040';
+  return '#3fb950';
+}
+
+function _openPortLive(ip, idx, portName, switchName, speedStr) {
+  _portLiveIp    = ip;
+  _portLiveIdx   = idx;
+  _portLiveSpeed = _parseSpeedBps(speedStr);
+  _portLiveSparkData = [];
+
+  document.getElementById('pl-title').textContent = `${switchName} · ${portName}`;
+  document.getElementById('pl-out').textContent   = '…';
+  document.getElementById('pl-in').textContent    = '…';
+  document.getElementById('pl-out').style.color   = '#c9d1d9';
+  document.getElementById('pl-in').style.color    = '#c9d1d9';
+  document.getElementById('pl-out-pct').textContent = '';
+  document.getElementById('pl-in-pct').textContent  = '';
+
+  document.getElementById('port-live-modal').classList.add('open');
+
+  _pollPortLive();
+  _portLiveInterval = setInterval(_pollPortLive, 5000);
+}
+
+function _closePortLive() {
+  if (_portLiveInterval) { clearInterval(_portLiveInterval); _portLiveInterval = null; }
+  document.getElementById('port-live-modal').classList.remove('open');
+}
+
+async function _pollPortLive() {
+  try {
+    const r = await fetch(`/api/port_live?switch_ip=${encodeURIComponent(_portLiveIp)}&ifindex=${encodeURIComponent(_portLiveIdx)}`);
+    if (!r.ok) return;
+    const d = await r.json();
+    if (d.in_bps == null) return;  // first reading — waiting for delta
+
+    const outEl   = document.getElementById('pl-out');
+    const inEl    = document.getElementById('pl-in');
+    const outPctEl = document.getElementById('pl-out-pct');
+    const inPctEl  = document.getElementById('pl-in-pct');
+
+    outEl.textContent     = _fmtBps(d.out_bps);
+    inEl.textContent      = _fmtBps(d.in_bps);
+    outEl.style.color     = _bpsColor(d.out_bps);
+    inEl.style.color      = _bpsColor(d.in_bps);
+    if (_portLiveSpeed > 0) {
+      outPctEl.textContent = `${(d.out_bps / _portLiveSpeed * 100).toFixed(1)}% of ${_fmtBps(_portLiveSpeed)}`;
+      inPctEl.textContent  = `${(d.in_bps  / _portLiveSpeed * 100).toFixed(1)}% of ${_fmtBps(_portLiveSpeed)}`;
+    }
+
+    _portLiveSparkData.push({ in_bps: d.in_bps, out_bps: d.out_bps, ts: Date.now() });
+    if (_portLiveSparkData.length > 72) _portLiveSparkData.shift();  // 6 min @ 5s
+    _drawSparkline();
+  } catch {}
+}
+
+function _drawSparkline() {
+  const canvas = document.getElementById('pl-sparkline');
+  const data   = _portLiveSparkData;
+  const dpr = window.devicePixelRatio || 1;
+  const W   = canvas.clientWidth || 400;
+  const H   = canvas.clientHeight || 90;
+  canvas.width  = W * dpr;
+  canvas.height = H * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  ctx.fillStyle = '#0d1117';
+  ctx.fillRect(0, 0, W, H);
+
+  if (!data.length) return;
+
+  const maxVal = Math.max(...data.map(d => Math.max(d.in_bps || 0, d.out_bps || 0)), 1);
+  const CAP    = 60; // slots shown (= 5 min @ 5s)
+  const pad    = { t: 18, r: 4, b: 4, l: 4 };
+  const pW = W - pad.l - pad.r;
+  const pH = H - pad.t - pad.b;
+  const sx = i => pad.l + (i / (CAP - 1)) * pW;
+  const sy = v => pad.t + (1 - v / maxVal) * pH;
+  const offset = CAP - data.length;
+
+  const drawSeries = (key, stroke, fill) => {
+    ctx.beginPath();
+    data.forEach((d, i) => {
+      const x = sx(offset + i), y = sy(d[key] || 0);
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    });
+    const last = data[data.length - 1];
+    ctx.lineTo(sx(offset + data.length - 1), pad.t + pH);
+    ctx.lineTo(sx(offset), pad.t + pH);
+    ctx.closePath();
+    ctx.fillStyle = fill; ctx.fill();
+    ctx.beginPath();
+    data.forEach((d, i) => {
+      const x = sx(offset + i), y = sy(d[key] || 0);
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    });
+    ctx.strokeStyle = stroke; ctx.lineWidth = 1.5; ctx.lineJoin = 'round'; ctx.stroke();
+  };
+
+  drawSeries('out_bps', '#f0883e', 'rgba(240,136,62,0.12)');
+  drawSeries('in_bps',  '#388bfd', 'rgba(56,139,253,0.12)');
+
+  ctx.font = '10px monospace'; ctx.textBaseline = 'top';
+  ctx.fillStyle = '#f0883e'; ctx.textAlign = 'left';  ctx.fillText('↑ out', 6, 2);
+  ctx.fillStyle = '#388bfd'; ctx.textAlign = 'left';  ctx.fillText('↓ in',  42, 2);
+  ctx.fillStyle = '#484f58'; ctx.textAlign = 'right'; ctx.fillText(_fmtBps(maxVal), W - 4, 2);
+}
+
+
+document.getElementById('port-live-modal').addEventListener('click', e => {
+  if (e.target === document.getElementById('port-live-modal')) _closePortLive();
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && document.getElementById('port-live-modal').classList.contains('open'))
+    _closePortLive();
+});
 </script>
+
+<div id="port-live-modal">
+  <div id="pl-inner">
+    <div id="pl-header">
+      <span id="pl-title">—</span>
+      <button class="close-btn" onclick="_closePortLive()">✕</button>
+    </div>
+    <div id="pl-meters">
+      <div>
+        <div class="pl-dir">↑ OUT</div>
+        <div class="pl-val" id="pl-out">—</div>
+        <div class="pl-pct" id="pl-out-pct"></div>
+      </div>
+      <div>
+        <div class="pl-dir">↓ IN</div>
+        <div class="pl-val" id="pl-in">—</div>
+        <div class="pl-pct" id="pl-in-pct"></div>
+      </div>
+    </div>
+    <div class="pl-chart-lbl">Last 6 min · live · 5s interval</div>
+    <canvas id="pl-sparkline"></canvas>
+  </div>
+</div>
 </body>
 </html>

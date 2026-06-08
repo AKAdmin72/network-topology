@@ -109,7 +109,7 @@ def _counter_delta_bps(curr: str, prev: str, elapsed_s: float,
         c, p = int(curr), int(prev)
         wrap = _MAX_64BIT if is64 else _MAX_32BIT
         delta = c - p if c >= p else (wrap - p + c + 1)
-        rate = delta / elapsed_s
+        rate = delta * 8 / elapsed_s   # octets → bits per second
         return rate if rate <= 400_000_000_000 else None  # sanity: max 400G
     except Exception:
         return None
@@ -867,6 +867,59 @@ async def poll_switch_ports(ip: str, community: str, timeout: int, retries: int)
             "alias": if_alias_r.get(idx, ""),
         })
     return ports
+
+
+# In-memory counter cache for live per-port speed polling.
+# Keyed by (switch_ip, ifindex), holds previous counter snapshot.
+_live_counter_cache: dict[tuple[str, str], dict] = {}
+
+
+async def poll_port_live(ip: str, community: str, timeout: int, ifindex: str) -> dict:
+    """Return instantaneous {in_bps, out_bps} for a single interface.
+
+    Uses HC (64-bit) octets via snmpget. First call returns nulls (no previous
+    snapshot); subsequent calls return bps computed from the counter delta.
+    """
+    import time
+
+    in_r, out_r = await asyncio.gather(
+        snmp_get(ip, community, f"{OID_IF_HC_IN_OCTETS}.{ifindex}",  timeout, 1),
+        snmp_get(ip, community, f"{OID_IF_HC_OUT_OCTETS}.{ifindex}", timeout, 1),
+    )
+    now = time.time()
+    try:
+        in_oct  = int(in_r)  if in_r  else None
+        out_oct = int(out_r) if out_r else None
+    except (ValueError, TypeError):
+        in_oct = out_oct = None
+
+    if in_oct is None:
+        # HC not supported — try 32-bit fallback
+        in_r2, out_r2 = await asyncio.gather(
+            snmp_get(ip, community, f"{OID_IF_IN_OCTETS}.{ifindex}",  timeout, 1),
+            snmp_get(ip, community, f"{OID_IF_OUT_OCTETS}.{ifindex}", timeout, 1),
+        )
+        try:
+            in_oct  = int(in_r2)  if in_r2  else None
+            out_oct = int(out_r2) if out_r2 else None
+        except (ValueError, TypeError):
+            pass
+
+    if in_oct is None:
+        return {"in_bps": None, "out_bps": None}
+
+    key  = (ip, ifindex)
+    prev = _live_counter_cache.get(key)
+    is64 = in_r is not None  # True if HC counter was used
+    _live_counter_cache[key] = {"ts": now, "in": in_oct, "out": out_oct, "hc": is64}
+
+    if prev is None or (now - prev["ts"]) < 0.5:
+        return {"in_bps": None, "out_bps": None}
+
+    elapsed = now - prev["ts"]
+    in_bps  = _counter_delta_bps(str(in_oct),  str(prev["in"]),  elapsed, is64=prev.get("hc", True))
+    out_bps = _counter_delta_bps(str(out_oct), str(prev["out"]), elapsed, is64=prev.get("hc", True))
+    return {"in_bps": in_bps, "out_bps": out_bps}
 
 
 def _uw_to_dbm(val_001uw: int | None) -> float | None:

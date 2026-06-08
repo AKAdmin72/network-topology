@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 import db
-from poller import build_topology, build_mac_tables, load_config, load_switches, refresh_link_counters, poll_switch_ports, poll_switch_sfp, get_switch_rest_creds
+from poller import build_topology, build_mac_tables, load_config, load_switches, refresh_link_counters, poll_switch_ports, poll_switch_sfp, get_switch_rest_creds, poll_port_live
 from fastapi import Query
 
 logging.basicConfig(
@@ -492,6 +492,15 @@ async def switch_ports_api(switch_ip: str = Query(...)):
     timeout   = int(cfg.get("snmp_timeout", 10))
     ports     = await poll_switch_ports(switch_ip, community, timeout, retries=1)
     return JSONResponse(ports)
+
+
+@app.get("/api/port_live")
+async def port_live_api(switch_ip: str = Query(...), ifindex: str = Query(...)):
+    cfg       = load_config()
+    community = os.getenv("SNMP_COMMUNITY") or cfg.get("community", "SECURECOMMUNITY")
+    timeout   = int(cfg.get("snmp_timeout", 10))
+    data      = await poll_port_live(switch_ip, community, timeout, ifindex)
+    return JSONResponse(data)
 
 
 @app.get("/api/switch_sfp")
