@@ -777,8 +777,10 @@ function _applyUptimeNodeColors() {
   if (!nodesDS) return;
   nodesDS.update(nodesDS.getIds().map(id => {
     const raw = nodesDS.get(id)?._raw;
-    if (!raw?.managed) return { id };
-    return { id, ..._uptimeNodeStyle(raw) };
+    if (!raw) return { id };
+    if (_viewMode === 'uptime' && raw.managed)
+      return { id, ..._uptimeNodeStyle(raw) };
+    return { id, ..._nodeVisStyle(raw) };
   }));
 }
 
