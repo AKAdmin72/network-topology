@@ -429,7 +429,7 @@
   <span id="s-macs">MACs: —</span>
   <span id="s-poll">Polled: —</span>
   <span id="s-updated">Updated: —</span>
-  <div class="legend">
+  <div class="legend" id="sb-legend">
     <span><span class="ldot" style="background:#1f6feb"></span>Reachable</span>
     <span><span class="ldot" style="background:#6e2a2a"></span>Unreachable</span>
     <span><span class="ldot" style="background:#2d333b"></span>LLDP neighbor</span>
@@ -899,12 +899,30 @@ function buildVisEdges(data) {
   });
 }
 
+const _LEGEND_DEFAULT = `
+  <span><span class="ldot" style="background:#1f6feb"></span>Reachable</span>
+  <span><span class="ldot" style="background:#6e2a2a"></span>Unreachable</span>
+  <span><span class="ldot" style="background:#2d333b"></span>LLDP neighbor</span>
+  <span style="border-left:1px solid #30363d;padding-left:12px">
+    <span class="ldot" style="background:#3fb950;border-radius:2px;width:18px;height:3px"></span>10G
+  </span>
+  <span><span class="ldot" style="background:#e3b341;border-radius:2px;width:18px;height:2px"></span>1G</span>
+  <span><span class="ldot" style="background:#484f58;border-radius:2px;width:18px;height:1px"></span>100M</span>`;
+
+const _LEGEND_UPTIME = `
+  <span><span class="ldot" style="background:#3fb950"></span>≥ 7 дней</span>
+  <span><span class="ldot" style="background:#e3b341"></span>&lt; 7 дней</span>
+  <span><span class="ldot" style="background:#d4820a"></span>&lt; 24 ч</span>
+  <span><span class="ldot" style="background:#f85149"></span>&lt; 1 ч</span>`;
+
 function setViewMode(mode) {
   const prev = _viewMode;
   _viewMode = mode;
   ['speed', 'traffic', 'errors', 'stp', 'uptime'].forEach(m => {
     document.getElementById('vm-' + m).classList.toggle('btn-active', m === mode);
   });
+  document.getElementById('sb-legend').innerHTML =
+    mode === 'uptime' ? _LEGEND_UPTIME : _LEGEND_DEFAULT;
   if (edgesDS) {
     edgesDS.update(buildVisEdges(currentData));
     if (_vlanFilter) _applyVlanFilter();
