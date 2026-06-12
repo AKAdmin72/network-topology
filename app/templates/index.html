@@ -377,6 +377,7 @@
     <button class="vm-btn"            id="vm-traffic" onclick="setViewMode('traffic')">Traffic</button>
     <button class="vm-btn"            id="vm-errors"  onclick="setViewMode('errors')">Errors</button>
     <button class="vm-btn"            id="vm-stp"     onclick="setViewMode('stp')">STP</button>
+    <button class="vm-btn"            id="vm-uptime"  onclick="setViewMode('uptime')">Uptime</button>
   </div>
   <div id="search-wrap">
     <input id="search" type="text" placeholder="Search switch..." oninput="searchNode(this.value)" onkeydown="searchKey(event)">
@@ -565,6 +566,10 @@
       <span class="info-label">Model</span>
       <span id="np-descr" style="font-size:12px;color:#c9d1d9;word-break:break-word"></span>
     </div>
+    <div class="info-row" id="np-uptime-row" style="display:none">
+      <span class="info-label">Uptime</span>
+      <span id="np-uptime" style="font-size:12px;color:#c9d1d9"></span>
+    </div>
     <button id="btn-add-monitor" onclick="addToMonitoring()" style="display:none;width:100%;margin-top:10px;">+ Add to monitoring</button>
     <div id="np-add-status" style="font-size:12px;margin-top:6px;"></div>
     <button id="btn-delete" class="btn-danger" onclick="deleteNode()" style="width:100%;margin-top:12px;">Delete</button>
@@ -745,6 +750,38 @@ function _fmtBps(bps) {
   return Math.round(bps) + ' bps';
 }
 
+function _fmtUptime(s) {
+  if (s == null) return '—';
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h ${m}m`;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m`;
+  return '< 1m';
+}
+
+function _uptimeNodeStyle(raw) {
+  const s = raw?.uptime_s;
+  if (s == null || !raw?.managed) return _nodeVisStyle(raw);
+  const mk = (bg, border, hbg, hb) => ({
+    color: { background: bg, border, highlight: { background: hbg, border: hb }, hover: { background: hbg, border: hb } }
+  });
+  if (s < 3600)   return mk('#4a0a0a', '#f85149', '#5a1010', '#ff7b72');  // red   < 1h
+  if (s < 86400)  return mk('#3a1500', '#d4820a', '#4a2000', '#e3a050');  // orange < 24h
+  if (s < 604800) return mk('#3a3000', '#e3b341', '#4a3d00', '#f0c040');  // yellow < 7d
+  return mk('#0a3320', '#3fb950', '#0f4a2e', '#56d364');                   // green >= 7d
+}
+
+function _applyUptimeNodeColors() {
+  if (!nodesDS) return;
+  nodesDS.update(nodesDS.getIds().map(id => {
+    const raw = nodesDS.get(id)?._raw;
+    if (!raw?.managed) return { id };
+    return { id, ..._uptimeNodeStyle(raw) };
+  }));
+}
+
 function _speedBps(s) {
   if (!s) return 0;
   if (s.endsWith('G+')) return 10e9;
@@ -861,14 +898,19 @@ function buildVisEdges(data) {
 }
 
 function setViewMode(mode) {
+  const prev = _viewMode;
   _viewMode = mode;
-  ['speed', 'traffic', 'errors', 'stp'].forEach(m => {
+  ['speed', 'traffic', 'errors', 'stp', 'uptime'].forEach(m => {
     document.getElementById('vm-' + m).classList.toggle('btn-active', m === mode);
   });
   if (edgesDS) {
     edgesDS.update(buildVisEdges(currentData));
     if (_vlanFilter) _applyVlanFilter();
     else if (_macRouteHighlight) _applyMacHighlight(_macRouteHighlight.nodes, _macRouteHighlight.edges);
+  }
+  if (nodesDS && (mode === 'uptime' || prev === 'uptime')) {
+    _applyViewFilter();
+    _applyUptimeNodeColors();
   }
 }
 
@@ -972,6 +1014,7 @@ async function loadTopology() {
       savePositions();
       document.getElementById('poll-status').textContent = '';
       _applyViewFilter();
+      if (_viewMode === 'uptime') _applyUptimeNodeColors();
       network.fit({ animation: { duration: 600 } });
     });
     network.on('dragEnd', savePositions);
@@ -1035,6 +1078,7 @@ async function loadTopology() {
 
   updateStatusBar();
   _applyViewFilter();
+  if (_viewMode === 'uptime') _applyUptimeNodeColors();
   if (_vlanFilter) _applyVlanFilter();
   else if (_macRouteHighlight) _applyMacHighlight(_macRouteHighlight.nodes, _macRouteHighlight.edges);
   if (_currentEdgeId !== null) showEdgePanel(_currentEdgeId);
@@ -1531,6 +1575,14 @@ function onNodeClick(params) {
     descrRow.style.display = '';
   } else {
     descrRow.style.display = 'none';
+  }
+
+  const uptimeRow = document.getElementById('np-uptime-row');
+  if (node.uptime_s != null) {
+    document.getElementById('np-uptime').textContent = _fmtUptime(node.uptime_s);
+    uptimeRow.style.display = '';
+  } else {
+    uptimeRow.style.display = 'none';
   }
 
   const addBtn = document.getElementById('btn-add-monitor');
@@ -2190,8 +2242,12 @@ function _makeBaseLabel(raw, id) {
   const displayName = raw?.label || id;
   const shortName = displayName.length > 20 ? displayName.slice(0, 18) + '…' : displayName;
   const sym = raw ? _typeSymbol(raw) : '';
-  if (raw?.ip) return sym + shortName + '\n' + raw.ip;
-  return (raw?.stp_root ? sym + '★ ' : sym) + shortName;
+  let base;
+  if (raw?.ip) base = sym + shortName + '\n' + raw.ip;
+  else base = (raw?.stp_root ? sym + '★ ' : sym) + shortName;
+  if (_viewMode === 'uptime' && raw?.managed && raw?.uptime_s != null)
+    base += '\n' + _fmtUptime(raw.uptime_s);
+  return base;
 }
 
 function _toggleSwitchDevices(switchId) {

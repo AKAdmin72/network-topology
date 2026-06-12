@@ -17,6 +17,7 @@ SW_LINKS_FILE = Path(os.getenv("DATA_DIR", "/data")) / "sw_links.json"
 
 # SNMPv2-MIB
 OID_SYS_DESCR           = "1.3.6.1.2.1.1.1.0"
+OID_SYS_UPTIME          = "1.3.6.1.2.1.1.3.0"  # centiseconds since last reboot
 
 # Q-BRIDGE-MIB (HP ProCurve / IEEE 802.1Q)
 OID_DOT1Q_VLAN_NAMES    = "1.3.6.1.2.1.17.7.1.4.3.1.1"  # vlanId → name
@@ -99,6 +100,34 @@ def _fmt_speed(bps_str: str, mbps_str: str = "") -> str:
     except Exception:
         pass
     return ""
+
+
+def _parse_timeticks(raw: str) -> float | None:
+    """Parse SNMP timeticks string to seconds.
+
+    Handles -Oqv format 'D:H:M:S.cs' and raw centisecond integer strings.
+    """
+    raw = raw.strip()
+    if not raw:
+        return None
+    # Parenthesized raw centiseconds: (3868311618)
+    m = re.match(r'^\((\d+)\)$', raw)
+    if m:
+        return int(m.group(1)) / 100.0
+    # Colon-separated: D:H:M:S.cc or H:M:S.cc
+    parts = raw.split(':')
+    try:
+        if len(parts) == 4:
+            return int(parts[0]) * 86400 + int(parts[1]) * 3600 + int(parts[2]) * 60 + float(parts[3])
+        if len(parts) == 3:
+            return int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+    except (ValueError, TypeError):
+        pass
+    # Plain integer centiseconds
+    try:
+        return int(raw) / 100.0
+    except (ValueError, TypeError):
+        return None
 
 
 def _counter_delta_bps(curr: str, prev: str, elapsed_s: float,
@@ -423,6 +452,7 @@ async def poll_switch(ip: str, community: str, timeout: int, retries: int,
         stp_port_state_raw, stp_port_ifidx_raw,
         stp_root_port_val, sys_descr_raw,
         vlan_names_raw, vlan_egress_raw, vlan_untagged_raw, port_pvid_raw,
+        sys_uptime_raw,
     ) = await asyncio.gather(
         snmp_walk(ip, community, OID_IF_DESCR,              timeout, retries),
         snmp_walk(ip, community, OID_REM_SYS_NAME,          timeout, retries),
@@ -448,9 +478,17 @@ async def poll_switch(ip: str, community: str, timeout: int, retries: int,
         snmp_walk(ip, community, OID_DOT1Q_VLAN_EGRESS,    timeout, retries),
         snmp_walk(ip, community, OID_DOT1Q_VLAN_UNTAGGED,  timeout, retries),
         snmp_walk(ip, community, OID_DOT1Q_PVID,           timeout, retries),
+        snmp_get(ip,  community, OID_SYS_UPTIME,           timeout, retries),
     )
 
     sys_descr = re.sub(r'\s*\(/\S.*$', '', (sys_descr_raw or "").split("\n")[0]).strip()
+
+    uptime_s: float | None = None
+    try:
+        if sys_uptime_raw:
+            uptime_s = _parse_timeticks(sys_uptime_raw)
+    except Exception:
+        pass
 
     # Q-BRIDGE-MIB VLAN data (HP ProCurve; empty dict for unsupported switches)
     vlan_names: dict[int, str] = {}
@@ -606,6 +644,7 @@ async def poll_switch(ip: str, community: str, timeout: int, retries: int,
         "vlans":       vlans,
         "port_pvid":   port_pvid,
         "port_names":  dict(if_descr),
+        "uptime_s":    uptime_s,
     }
 
 
@@ -648,6 +687,7 @@ async def build_topology() -> dict:
             "vlans":      r.get("vlans", []),
             "port_pvid":  r.get("port_pvid", {}),
             "port_names": r.get("port_names", {}),
+            "uptime_s":   r.get("uptime_s"),
         }
 
     # Reconcile node_keys: managed switch seen as LLDP neighbor → use its canonical name
