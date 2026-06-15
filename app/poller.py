@@ -951,7 +951,19 @@ async def poll_port_live(ip: str, community: str, timeout: int, ifindex: str) ->
     key  = (ip, ifindex)
     prev = _live_counter_cache.get(key)
     is64 = in_r is not None  # True if HC counter was used
-    _live_counter_cache[key] = {"ts": now, "in": in_oct, "out": out_oct, "hc": is64}
+
+    # Stale detection: counter identical to previous snapshot means the SNMP agent
+    # hasn't refreshed its internal cache yet (common on Juniper, ~10s refresh cycle).
+    # Don't update ts/in/out so that elapsed is measured from the last real change.
+    # After 3 identical readings in a row we conclude traffic is genuinely zero.
+    if prev is not None and in_oct == prev["in"] and out_oct == prev["out"]:
+        stale = prev.get("stale_count", 0) + 1
+        _live_counter_cache[key] = {**prev, "stale_count": stale}
+        if stale >= 3:
+            return {"in_bps": 0.0, "out_bps": 0.0}
+        return {"in_bps": None, "out_bps": None}
+
+    _live_counter_cache[key] = {"ts": now, "in": in_oct, "out": out_oct, "hc": is64, "stale_count": 0}
 
     if prev is None or (now - prev["ts"]) < 0.5:
         return {"in_bps": None, "out_bps": None}
