@@ -453,6 +453,9 @@
     <div class="info-row"><span class="info-label">To</span><span id="ep-to">—</span></div>
     <div class="info-row"><span class="info-label">Speed</span><span id="ep-speed">—</span></div>
     <div class="info-row"><span class="info-label">Status</span><span id="ep-status">—</span></div>
+    <div id="ep-members-row" style="display:none;font-size:11px;color:#8b949e;margin:4px 0 6px;border-top:1px solid #21262d;padding-top:6px">
+      <div id="ep-members-list"></div>
+    </div>
     <div class="ep-section">Traffic</div>
     <div class="info-row"><span class="info-label">↑ Out</span><span id="ep-out">—</span></div>
     <div class="info-row"><span class="info-label">↓ In</span><span id="ep-in">—</span></div>
@@ -628,6 +631,8 @@ let currentData = { nodes: [], edges: [] };
 let _currentNodeId = null;
 let _currentEdgeId = null;
 let _lastUpdateTs  = null;
+let _hoveredEdgeId    = null;
+let _hoveredEdgeLabel = null;
 let _pollInterval  = 300;
 let _viewMode = 'speed';
 let _macRouteHighlight = null;
@@ -807,15 +812,68 @@ function _abbrevPort(p) {
     .replace(/^Loopback/i,              'Lo');
 }
 
+let _visEdgeData = new Map();  // visEdgeId → merged edge data
+
+function _mergeEdgeGroup(members) {
+  if (members.length === 1) return { ...members[0], _members: members, _count: 1 };
+  const first = members[0];
+  const sumOrNull = k => {
+    const vals = members.map(e => e[k]).filter(v => v != null);
+    return vals.length ? vals.reduce((a, b) => a + b, 0) : null;
+  };
+  const _STP_PRI = { blocking: 3, learning: 2, forwarding: 1 };
+  const worstStp = members.reduce(
+    (w, e) => (_STP_PRI[e.stp_state] || 0) > (_STP_PRI[w] || 0) ? e.stp_state : w, '');
+  const speeds = [...new Set(members.map(e => e.local_port_speed).filter(Boolean))];
+  return {
+    from: first.from, to: first.to,
+    local_port:       members.map(e => e.local_port  || '').join(' + '),
+    remote_port:      members.map(e => e.remote_port || '').join(' + '),
+    local_port_speed: speeds.length === 1 ? `${members.length}×${speeds[0]}` : speeds.join('+'),
+    _member_speed:    speeds[0] || '',
+    local_port_status: members.some(e => !e.cached && e.local_port_status === '2') ? '2' : '1',
+    in_bps:    sumOrNull('in_bps'),
+    out_bps:   sumOrNull('out_bps'),
+    in_err_s:  sumOrNull('in_err_s'),
+    out_err_s: sumOrNull('out_err_s'),
+    stp_state:  worstStp,
+    cached:     members.every(e => e.cached),
+    switch_ip:  first.switch_ip,
+    local_port_num: first.local_port_num,
+    last_seen:  first.last_seen,
+    _members:   members,
+    _count:     members.length,
+  };
+}
+
 function buildVisEdges(data) {
-  return data.edges.map((e, i) => {
+  _visEdgeData = new Map();
+
+  // Group edges by unordered node pair to merge parallel/LAG links
+  const groups = new Map();
+  data.edges.forEach(e => {
+    const key = [e.from, e.to].sort().join('\x00');
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(e);
+  });
+
+  const result = [];
+  let visId = 0;
+
+  groups.forEach(members => {
+    const e   = _mergeEdgeGroup(members);
+    const cnt = e._count;
     const cached   = !!e.cached;
     const portDown = !cached && e.local_port_status === '2';
     const speed    = e.local_port_speed || '';
-    const portLabel = (e.local_port && e.remote_port)
-      ? `${_abbrevPort(e.local_port)} · ${_abbrevPort(e.remote_port)}`
-      : (e.local_port ? _abbrevPort(e.local_port) : '');
-    const lastSeen  = e.last_seen ? new Date(e.last_seen).toLocaleString() : '—';
+    const mSpeed   = e._member_speed || speed;  // base per-member speed for color/pct
+
+    const portLabel = cnt > 1
+      ? members.map(m => `${_abbrevPort(m.local_port)}·${_abbrevPort(m.remote_port)}`).join('\n')
+      : (e.local_port && e.remote_port
+          ? `${_abbrevPort(e.local_port)} · ${_abbrevPort(e.remote_port)}`
+          : (e.local_port ? _abbrevPort(e.local_port) : ''));
+    const lastSeen = e.last_seen ? new Date(e.last_seen).toLocaleString() : '—';
 
     let color, label, fontColor, dashes, width;
 
@@ -828,7 +886,7 @@ function buildVisEdges(data) {
     } else if (_viewMode === 'traffic') {
       const inB  = e.in_bps, outB = e.out_bps;
       const maxB = Math.max(inB || 0, outB || 0);
-      const pct  = _speedBps(speed) > 0 ? maxB / _speedBps(speed) * 100 : -1;
+      const pct  = _speedBps(mSpeed) > 0 ? maxB / (_speedBps(mSpeed) * cnt) * 100 : -1;
       color = pct < 0  ? { color: '#21262d', hover: '#6e7681', highlight: '#58a6ff' }
             : pct < 30 ? { color: '#1a4a2e', hover: '#3fb950', highlight: '#56d364' }
             : pct < 70 ? { color: '#4a3800', hover: '#e3b341', highlight: '#f0c040' }
@@ -837,7 +895,7 @@ function buildVisEdges(data) {
       fontColor = pct < 0 ? '#484f58' : pct < 30 ? '#3fb950' : pct < 70 ? '#e3b341' : pct < 90 ? '#d4820a' : '#f85149';
       label     = (inB != null || outB != null) ? `↑${_fmtBps(outB)}\n↓${_fmtBps(inB)}` : portLabel;
       dashes    = portDown ? [3, 3] : false;
-      width     = portDown ? 1 : Math.max(1, Math.min(4, maxB / 100_000_000));
+      width     = portDown ? 1 : Math.max(1, Math.min(4 * cnt, maxB / 100_000_000));
     } else if (_viewMode === 'errors') {
       const errIn = e.in_err_s || 0, errOut = e.out_err_s || 0;
       const hasErr = errIn > 0 || errOut > 0;
@@ -859,22 +917,26 @@ function buildVisEdges(data) {
       dashes    = blocking ? [4, 3] : false;
       width     = 1.5;
     } else {
-      // Speed mode (default)
-      if (portDown)                              color = { color: '#5a3a00', hover: '#d29922', highlight: '#e3b341' };
-      else if (speed === '10G' || speed === '10G+') color = { color: '#1a4a2e', hover: '#3fb950', highlight: '#56d364' };
-      else if (speed === '1G')                   color = { color: '#4a3800', hover: '#e3b341', highlight: '#f0c040' };
-      else if (speed === '100M')                 color = { color: '#2d2d2d', hover: '#6e7681', highlight: '#8b949e' };
-      else                                       color = { color: '#21262d', hover: '#6e7681', highlight: '#58a6ff' };
-      fontColor = portDown ? '#d29922' : (speed === '10G' || speed === '10G+') ? '#3fb950' : speed === '1G' ? '#e3b341' : '#6e7681';
-      label     = portLabel;
-      dashes    = false;
-      width     = speed === '10G' || speed === '10G+' ? 3 : speed === '1G' ? 2 : 1.5;
+      // Speed mode
+      if (portDown)                                color = { color: '#5a3a00', hover: '#d29922', highlight: '#e3b341' };
+      else if (mSpeed === '10G' || mSpeed === '10G+') color = { color: '#1a4a2e', hover: '#3fb950', highlight: '#56d364' };
+      else if (mSpeed === '1G')                    color = { color: '#4a3800', hover: '#e3b341', highlight: '#f0c040' };
+      else if (mSpeed === '100M')                  color = { color: '#2d2d2d', hover: '#6e7681', highlight: '#8b949e' };
+      else                                         color = { color: '#21262d', hover: '#6e7681', highlight: '#58a6ff' };
+      fontColor = portDown ? '#d29922'
+        : (mSpeed === '10G' || mSpeed === '10G+') ? '#3fb950'
+        : mSpeed === '1G' ? '#e3b341' : '#6e7681';
+      label  = portLabel;
+      dashes = false;
+      width  = (mSpeed === '10G' || mSpeed === '10G+') ? 2 * cnt : mSpeed === '1G' ? 1.5 * cnt : 1.5;
     }
 
-    const titleBase = `${escHtml(e.from)}:${escHtml(e.local_port || '?')} ↔ ${escHtml(e.to)}:${escHtml(e.remote_port || '?')}`;
+    const titleBase = members.map(m =>
+      `${escHtml(m.from)}:${escHtml(m.local_port || '?')} ↔ ${escHtml(m.to)}:${escHtml(m.remote_port || '?')}`
+    ).join('<br>');
     const titleExtra = [
-      speed    ? `<br>${escHtml(speed)}`                                          : '',
-      portDown ? '<br><span style="color:#d29922">⚠ port down</span>'             : '',
+      speed    ? `<br>${escHtml(speed)}`                                           : '',
+      portDown ? '<br><span style="color:#d29922">⚠ port down</span>'              : '',
       (e.in_bps != null) ? `<br>↑${_fmtBps(e.out_bps)} / ↓${_fmtBps(e.in_bps)}` : '',
       (e.in_err_s > 0 || e.out_err_s > 0)
         ? `<br><span style="color:#f85149">errors ↑${(e.in_err_s||0).toFixed(2)} ↓${(e.out_err_s||0).toFixed(2)}/s</span>` : '',
@@ -882,8 +944,9 @@ function buildVisEdges(data) {
       cached ? `<br><span style="color:#8b949e;font-size:11px">cached · last seen: ${escHtml(lastSeen)}</span>` : '',
     ].join('');
 
-    return {
-      id: i, from: e.from, to: e.to,
+    _visEdgeData.set(visId, e);
+    result.push({
+      id: visId, from: e.from, to: e.to,
       label, dashes: cached ? [6, 4] : (dashes || false),
       color,
       font: { color: fontColor, size: 10, align: 'horizontal', strokeWidth: 0, background: '#0d1117' },
@@ -895,8 +958,11 @@ function buildVisEdges(data) {
       smooth: { type: 'continuous', roundness: 0.1 },
       width: cached ? 1 : width,
       title: titleBase + titleExtra,
-    };
+    });
+    visId++;
   });
+
+  return result;
 }
 
 const _LEGEND_DEFAULT = `
@@ -1041,6 +1107,50 @@ async function loadTopology() {
     window.addEventListener('beforeunload', savePositions);
     network.on('click', onNodeClick);
     network.on('doubleClick', () => {});
+
+    network.on('hoverEdge', ({ edge }) => {
+      if (!edgesDS) return;
+      _hoveredEdgeId = edge;
+      const vis = edgesDS.get(edge);
+      _hoveredEdgeLabel = vis?.label ?? null;
+      if (_hoveredEdgeLabel) edgesDS.update({ id: edge, label: ' ' });
+    });
+    network.on('blurEdge', () => {
+      if (_hoveredEdgeId !== null && _hoveredEdgeLabel != null) {
+        const cur = edgesDS?.get(_hoveredEdgeId)?.label;
+        if (cur === ' ') edgesDS.update({ id: _hoveredEdgeId, label: _hoveredEdgeLabel });
+      }
+      _hoveredEdgeId    = null;
+      _hoveredEdgeLabel = null;
+    });
+    network.on('afterDrawing', ctx => {
+      if (_hoveredEdgeId === null || !_hoveredEdgeLabel) return;
+      const raw = _visEdgeData.get(_hoveredEdgeId);
+      if (!raw) return;
+      const fp = network.getPosition(raw.from);
+      const tp = network.getPosition(raw.to);
+      if (!fp || !tp) return;
+      const mx    = (fp.x + tp.x) / 2;
+      const my    = (fp.y + tp.y) / 2;
+      const scale = network.getScale();
+      const fsize = 14 / scale;
+      const lh    = fsize * 1.3;
+      const pad   = 4  / scale;
+      const lines = _hoveredEdgeLabel.split('\n');
+      ctx.save();
+      ctx.font             = `bold ${fsize}px sans-serif`;
+      ctx.textAlign        = 'center';
+      ctx.textBaseline     = 'middle';
+      const maxW   = Math.max(...lines.map(l => ctx.measureText(l).width));
+      const totalH = lines.length * lh;
+      ctx.fillStyle = '#0d1117';
+      ctx.fillRect(mx - maxW / 2 - pad, my - totalH / 2 - pad, maxW + pad * 2, totalH + pad * 2);
+      ctx.fillStyle = '#e6edf3';
+      lines.forEach((line, i) => {
+        ctx.fillText(line, mx, my + (i - (lines.length - 1) / 2) * lh);
+      });
+      ctx.restore();
+    });
 
   } else {
     const existingIds = new Set(nodesDS.getIds());
@@ -1633,7 +1743,7 @@ function closePanel() {
 }
 
 function showEdgePanel(edgeVisId) {
-  const raw = currentData.edges[edgeVisId];
+  const raw = _visEdgeData.get(edgeVisId);
   if (!raw) { closeEdgePanel(); return; }
   epTab('info');
   _currentEdgeId = edgeVisId;
@@ -1642,18 +1752,43 @@ function showEdgePanel(edgeVisId) {
   const toNode   = currentData.nodes.find(n => n.id === raw.to);
   const fromName = fromNode?.label || raw.from;
   const toName   = toNode?.label   || raw.to;
-  const lp = raw.local_port || '?', rp = raw.remote_port || '?';
 
-  document.getElementById('ep-ports').textContent = `${lp} ↔ ${rp}`;
-  document.getElementById('ep-from').textContent  = fromName;
-  document.getElementById('ep-to').textContent    = toName;
+  // Port header: one line per member for LAG, single line otherwise
+  const portsEl = document.getElementById('ep-ports');
+  if (raw._count > 1) {
+    portsEl.innerHTML = raw._members
+      .map(m => `${escHtml(m.local_port||'?')} ↔ ${escHtml(m.remote_port||'?')}`)
+      .join('<br>');
+  } else {
+    portsEl.textContent = `${raw.local_port||'?'} ↔ ${raw.remote_port||'?'}`;
+  }
+  document.getElementById('ep-from').textContent = fromName;
+  document.getElementById('ep-to').textContent   = toName;
 
-  const speed = raw.local_port_speed || '—';
+  const speed    = raw.local_port_speed || '—';
   const portDown = !raw.cached && raw.local_port_status === '2';
   document.getElementById('ep-speed').textContent = speed;
-  document.getElementById('ep-status').innerHTML  = portDown
-    ? '<span class="badge-err">✗ Down</span>'
-    : '<span class="badge-ok">✓ Up</span>';
+
+  // Status: show N/N Up for LAG
+  const upCount = raw._count > 1
+    ? raw._members.filter(m => m.cached || m.local_port_status !== '2').length
+    : (!portDown ? 1 : 0);
+  document.getElementById('ep-status').innerHTML = portDown
+    ? (raw._count > 1 ? `<span class="badge-err">⚠ ${upCount}/${raw._count} Up</span>` : '<span class="badge-err">✗ Down</span>')
+    : (raw._count > 1 ? `<span class="badge-ok">✓ ${upCount}/${raw._count} Up</span>` : '<span class="badge-ok">✓ Up</span>');
+
+  // Members list for LAG
+  const membersRow = document.getElementById('ep-members-row');
+  if (raw._count > 1) {
+    document.getElementById('ep-members-list').innerHTML = raw._members.map(m => {
+      const mDown = !m.cached && m.local_port_status === '2';
+      const dot   = mDown ? '<span style="color:#d29922">▼</span>' : '<span style="color:#3fb950">▲</span>';
+      return `<div style="margin-bottom:2px">${dot} ${escHtml(m.local_port||'?')} ↔ ${escHtml(m.remote_port||'?')}</div>`;
+    }).join('');
+    membersRow.style.display = '';
+  } else {
+    membersRow.style.display = 'none';
+  }
 
   const inBps = raw.in_bps, outBps = raw.out_bps;
   const speedBps = _speedBps(speed);
@@ -1704,7 +1839,7 @@ function showEdgePanel(edgeVisId) {
 
 async function refreshLinkCounters() {
   if (_currentEdgeId === null) return;
-  const raw = currentData.edges[_currentEdgeId];
+  const raw = _visEdgeData.get(_currentEdgeId);
   if (!raw || !raw.switch_ip || !raw.local_port_num) return;
 
   const btn    = document.getElementById('ep-refresh-btn');
@@ -1726,14 +1861,20 @@ async function refreshLinkCounters() {
       status.style.color = '#f85149';
       status.textContent = 'Switch unreachable';
     } else {
-      // Patch currentData edge with fresh counters
-      currentData.edges[_currentEdgeId] = {
-        ...raw, in_bps: data.in_bps, out_bps: data.out_bps,
-        in_err_s: data.in_err_s, out_err_s: data.out_err_s,
-      };
-      // Refresh panel and graph edge color/label
+      // Patch original currentData edge entry with fresh counters
+      const origIdx = currentData.edges.findIndex(
+        e => e.switch_ip === raw.switch_ip && e.local_port_num === raw.local_port_num);
+      if (origIdx >= 0) {
+        currentData.edges[origIdx] = {
+          ...currentData.edges[origIdx],
+          in_bps: data.in_bps, out_bps: data.out_bps,
+          in_err_s: data.in_err_s, out_err_s: data.out_err_s,
+        };
+      }
+      // Rebuild edges (updates _visEdgeData), refresh panel and graph
+      const allVisEdges = buildVisEdges(currentData);
       showEdgePanel(_currentEdgeId);
-      const updatedEdge = buildVisEdges(currentData)[_currentEdgeId];
+      const updatedEdge = allVisEdges.find(ve => ve.id === _currentEdgeId);
       if (updatedEdge && edgesDS) edgesDS.update([updatedEdge]);
       status.style.color = '#3fb950';
       status.textContent = '✓ Updated ' + new Date().toLocaleTimeString();
@@ -2439,7 +2580,7 @@ async function _loadPanelChart(switchIp, portNum, edgeId) {
 
 async function expandChart() {
   if (_currentEdgeId === null) return;
-  const raw      = currentData.edges[_currentEdgeId];
+  const raw      = _visEdgeData.get(_currentEdgeId);
   const fromNode = currentData.nodes.find(n => n.id === raw?.from);
   const toNode   = currentData.nodes.find(n => n.id === raw?.to);
   document.getElementById('cm-title').textContent =
@@ -2467,7 +2608,7 @@ async function _loadExpandedChart(hours) {
   document.querySelectorAll('.cm-range-btn').forEach(b => {
     b.classList.toggle('btn-active', b.textContent === ({2:'2h',6:'6h',24:'24h',168:'7d'}[hours]));
   });
-  const raw = currentData.edges[_currentEdgeId];
+  const raw = _visEdgeData.get(_currentEdgeId);
   if (!raw?.switch_ip) return;
   const canvas = document.getElementById('cm-chart');
   drawTrafficChart(canvas, null, { labels: true });
