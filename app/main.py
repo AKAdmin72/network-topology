@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 import db
-from poller import build_topology, build_mac_tables, load_config, load_switches, refresh_link_counters, poll_switch_ports, poll_switch_sfp, get_switch_rest_creds, poll_port_live
+from poller import build_topology, build_mac_tables, load_config, load_switches, refresh_link_counters, poll_switch_ports, poll_switch_sfp, get_switch_rest_creds, poll_port_live, _hostname_cache, load_node_info_cache
 from fastapi import Query
 
 logging.basicConfig(
@@ -134,6 +134,8 @@ async def run_poll():
 async def lifespan(app: FastAPI):
     global _poll_interval
     db.init()
+    _hostname_cache.update(db.get_known_hostnames())
+    load_node_info_cache()
     cfg      = load_config()
     interval = int(cfg.get("poll_interval", 300))
     _poll_interval = interval

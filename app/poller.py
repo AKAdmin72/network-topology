@@ -13,7 +13,8 @@ import db
 
 log = logging.getLogger(__name__)
 
-SW_LINKS_FILE = Path(os.getenv("DATA_DIR", "/data")) / "sw_links.json"
+SW_LINKS_FILE         = Path(os.getenv("DATA_DIR", "/data")) / "sw_links.json"
+_NODE_INFO_CACHE_FILE = Path(os.getenv("DATA_DIR", "/data")) / "node_info_cache.json"
 
 # SNMPv2-MIB
 OID_SYS_DESCR           = "1.3.6.1.2.1.1.1.0"
@@ -435,12 +436,28 @@ async def aruba_rest_vlans(ip: str, user: str, pwd: str, timeout: int) -> dict:
 async def poll_switch(ip: str, community: str, timeout: int, retries: int,
                       rest_creds: tuple[str, str] | None = None) -> dict:
     loc_name = await snmp_get(ip, community, OID_LOC_SYS_NAME, timeout, retries)
+    _snmp_no_lldp = loc_name is not None and (
+        "no such" in loc_name.lower() or "not available" in loc_name.lower()
+    )
     if loc_name is None:
         log.warning("Cannot reach %s", ip)
-        return {"ip": ip, "name": ip, "links": [], "reachable": False,
-                "if_counters": {}, "stp_root": False, "stp_by_ifidx": {}}
+        name   = _hostname_cache.get(ip, ip)
+        cached = _node_info_cache.get(ip, {})
+        return {"ip": ip, "name": name, "links": [], "reachable": False,
+                "if_counters": {}, "stp_root": False, "stp_by_ifidx": {},
+                "descr":         cached.get("descr", ""),
+                "port_names":    cached.get("port_names", {}),
+                "vlans":         cached.get("vlans", []),
+                "port_pvid":     cached.get("port_pvid", {}),
+                "_cached_links": cached.get("links", [])}
 
-    loc_name = loc_name.strip() or ip
+    if _snmp_no_lldp:
+        # Switch responds to SNMP but has no LLDP sysName — use cache/IP as stable ID and continue
+        log.warning("No LLDP sysName for %s, using fallback name", ip)
+        loc_name = _hostname_cache.get(ip, ip)
+    else:
+        loc_name = loc_name.strip() or ip
+        _hostname_cache[ip] = loc_name  # update cache on successful poll
 
     (
         if_descr,
@@ -569,7 +586,7 @@ async def poll_switch(ip: str, community: str, timeout: int, retries: int,
     links = []
     for idx, rem_name in rem_names.items():
         rem_name = _clean_remote_name(rem_name)
-        if not rem_name:
+        if not rem_name or "no such" in rem_name.lower() or "not available" in rem_name.lower():
             continue
         parts = idx.split(".")
         if len(parts) < 3:
@@ -636,6 +653,13 @@ async def poll_switch(ip: str, community: str, timeout: int, retries: int,
                 for v in rest["vlans"]
             ]
 
+    _node_info_cache[ip] = {
+        "descr":      sys_descr,
+        "port_names": dict(if_descr),
+        "vlans":      vlans,
+        "port_pvid":  port_pvid,
+        "links":      links,
+    }
     return {
         "ip": ip, "name": loc_name, "links": links, "reachable": True,
         "if_counters": if_counters,
@@ -689,6 +713,13 @@ async def build_topology() -> dict:
             "port_names": r.get("port_names", {}),
             "uptime_s":   r.get("uptime_s"),
         }
+
+    # Sanity-check: reject any managed node whose name looks like an SNMP error string
+    for name in list(nodes.keys()):
+        if "no such" in name.lower() or "not available" in name.lower():
+            log.warning("Dropping managed node with SNMP-error name: %r", name[:80])
+            nodes.pop(name, None)
+            switch_results = [r for r in switch_results if r["name"] != name]
 
     # Reconcile node_keys: managed switch seen as LLDP neighbor → use its canonical name
     managed_by_name = {r["name"]: r["name"] for r in switch_results}
@@ -752,6 +783,7 @@ async def build_topology() -> dict:
                 }
 
     db.save_counters(new_counters)
+    _save_node_info_cache()
 
     # Save traffic history for switch-to-switch links only
     managed_set = {r["name"] for r in switch_results}
@@ -862,6 +894,51 @@ async def build_topology() -> dict:
         added_pairs.add(pair)
     # ─────────────────────────────────────────────────────────────────────────
 
+    # ── Restore last-known LLDP neighbors for offline switches ───────────────
+    # Managed-managed pairs are already covered by sw_links.json above.
+    # This pass adds unmanaged neighbors (APs, routers, etc.) that were only
+    # visible via the offline switch's LLDP, so the LLDP panel stays informative.
+    offline_cache_pairs: set = set()
+    for r in switch_results:
+        if not r.get("_cached_links"):
+            continue
+        from_name = r["name"]
+        for link in r["_cached_links"]:
+            nk   = managed_by_name.get(link["remote_name"], link["node_key"])
+            pair = frozenset([from_name, nk])
+            if pair in live_pairs or pair in added_pairs or pair in offline_cache_pairs:
+                continue
+            if nk not in nodes:
+                nodes[nk] = {
+                    "id":            nk,
+                    "label":         link["remote_name"],
+                    "ip":            link.get("remote_ip", ""),
+                    "reachable":     False,
+                    "managed":       False,
+                    "node_type":     link.get("lldp_node_type", "other"),
+                    "stp_root":      False,
+                    "lldp_is_infra": link.get("lldp_is_infra", False),
+                }
+            edges.append({
+                "from":              from_name,
+                "to":                nk,
+                "local_port":        link["local_port"],
+                "remote_port":       link["remote_port"],
+                "local_port_status": link.get("local_port_status", ""),
+                "local_port_speed":  link.get("local_port_speed", ""),
+                "stp_state":         link.get("stp_state", ""),
+                "in_bps":            None,
+                "out_bps":           None,
+                "in_err_s":          None,
+                "out_err_s":         None,
+                "local_port_num":    link["local_port_num"],
+                "remote_port_num":   "",
+                "switch_ip":         r["ip"],
+                "cached":            True,
+            })
+            offline_cache_pairs.add(pair)
+    # ─────────────────────────────────────────────────────────────────────────
+
     reachable_count = sum(1 for r in switch_results if r["reachable"])
     return {
         "nodes": list(nodes.values()),
@@ -912,6 +989,25 @@ async def poll_switch_ports(ip: str, community: str, timeout: int, retries: int)
 # In-memory counter cache for live per-port speed polling.
 # Keyed by (switch_ip, ifindex), holds previous counter snapshot.
 _live_counter_cache: dict[tuple[str, str], dict] = {}
+_hostname_cache:     dict[str, str]  = {}  # ip → last known hostname
+_node_info_cache:    dict[str, dict] = {}  # ip → {descr, port_names, vlans, port_pvid, links}
+
+
+def load_node_info_cache() -> None:
+    global _node_info_cache
+    try:
+        if _NODE_INFO_CACHE_FILE.exists():
+            _node_info_cache = json.loads(_NODE_INFO_CACHE_FILE.read_text())
+    except Exception as e:
+        log.warning("Cannot load node_info_cache: %s", e)
+
+
+def _save_node_info_cache() -> None:
+    try:
+        _NODE_INFO_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _NODE_INFO_CACHE_FILE.write_text(json.dumps(_node_info_cache, ensure_ascii=False))
+    except Exception as e:
+        log.warning("Cannot save node_info_cache: %s", e)
 
 
 async def poll_port_live(ip: str, community: str, timeout: int, ifindex: str) -> dict:

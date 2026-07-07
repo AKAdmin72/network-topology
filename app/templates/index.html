@@ -661,8 +661,11 @@ async function fetchPositions() {
 function savePositions() {
   if (!network) return;
   const allPos = network.getPositions();
+  const ipById = {};
+  for (const n of currentData.nodes) if (n.ip && n.ip !== n.id) ipById[n.id] = n.ip;
   for (const [id, pos] of Object.entries(allPos)) {
     _cachedPos[id] = pos;
+    if (ipById[id]) _cachedPos[ipById[id]] = pos;  // index by IP too (stable across hostname↔IP transitions)
   }
   clearTimeout(_saveTimer);
   _saveTimer = setTimeout(() => {
@@ -729,7 +732,7 @@ function _nodeVisStyle(n) {
 
 function buildVisNodes(data, pos = {}) {
   return data.nodes.map(n => {
-    const p       = pos[n.id];
+    const p       = pos[n.id] ?? (n.ip ? pos[n.ip] : undefined);
     const style   = _nodeVisStyle(n);
     return {
       id: n.id,

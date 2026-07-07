@@ -259,3 +259,21 @@ def save_counters(entries: dict):
                  d.get("in_octets"), d.get("out_octets"),
                  d.get("in_errors"), d.get("out_errors")),
             )
+
+
+def get_known_hostnames() -> dict[str, str]:
+    """Return {ip: hostname} from the latest switch_appeared events where hostname != ip."""
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute("""
+            SELECT node_id, json_extract(detail, '$.ip') AS ip
+            FROM events
+            WHERE type = 'switch_appeared'
+              AND detail IS NOT NULL
+              AND node_id != json_extract(detail, '$.ip')
+            GROUP BY json_extract(detail, '$.ip')
+            HAVING ts = MAX(ts)
+        """).fetchall()
+    return {
+        ip: name for name, ip in rows
+        if ip and "no such" not in name.lower() and "not available" not in name.lower()
+    }
